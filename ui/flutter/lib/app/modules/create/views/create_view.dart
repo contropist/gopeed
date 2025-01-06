@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:path/path.dart' as path;
-import 'package:rounded_loading_button/rounded_loading_button.dart';
+import 'package:rounded_loading_button_plus/rounded_loading_button.dart';
 
 import '../../../../api/api.dart';
 import '../../../../api/model/create_task.dart';
@@ -17,8 +17,9 @@ import '../../../../util/input_formatter.dart';
 import '../../../../util/message.dart';
 import '../../../../util/util.dart';
 import '../../../routes/app_pages.dart';
+import '../../../views/compact_checkbox.dart';
 import '../../../views/directory_selector.dart';
-import '../../../views/file_list_view.dart';
+import '../../../views/file_tree_view.dart';
 import '../../app/controllers/app_controller.dart';
 import '../../history/views/history_view.dart';
 import '../controllers/create_controller.dart';
@@ -31,12 +32,18 @@ class CreateView extends GetView<CreateController> {
   final _connectionsController = TextEditingController();
   final _pathController = TextEditingController();
   final _confirmController = RoundedLoadingButtonController();
+  final _proxyIpController = TextEditingController();
+  final _proxyPortController = TextEditingController();
+  final _proxyUsrController = TextEditingController();
+  final _proxyPwdController = TextEditingController();
   final _httpUaController = TextEditingController();
   final _httpCookieController = TextEditingController();
   final _httpRefererController = TextEditingController();
   final _btTrackerController = TextEditingController();
 
   final _availableSchemes = ["http:", "https:", "magnet:"];
+
+  final _skipVerifyCertController = false.obs;
 
   CreateView({Key? key}) : super(key: key);
 
@@ -205,7 +212,7 @@ class CreateView extends GetView<CreateController> {
                                                 decoration: BoxDecoration(
                                                   color: Theme.of(context)
                                                       .colorScheme
-                                                      .background,
+                                                      .surface,
                                                   borderRadius:
                                                       BorderRadius.circular(
                                                           10.0),
@@ -260,7 +267,164 @@ class CreateView extends GetView<CreateController> {
                           () => Visibility(
                             visible: controller.showAdvanced.value,
                             child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Transform.translate(
+                                      offset: const Offset(-40, 0),
+                                      child: Row(
+                                        children: [
+                                          const Icon(
+                                            Icons.wifi_2_bar,
+                                            color: Colors.grey,
+                                          ),
+                                          const SizedBox(
+                                            width: 15,
+                                          ),
+                                          SizedBox(
+                                              width: 150,
+                                              child: DropdownButton<
+                                                  RequestProxyMode>(
+                                                hint: Text('proxy'.tr),
+                                                isExpanded: true,
+                                                value: controller
+                                                    .proxyConfig.value?.mode,
+                                                onChanged: (value) async {
+                                                  if (value != null) {
+                                                    controller.proxyConfig
+                                                        .value = RequestProxy()
+                                                      ..mode = value;
+                                                  }
+                                                },
+                                                items: [
+                                                  DropdownMenuItem<
+                                                      RequestProxyMode>(
+                                                    value:
+                                                        RequestProxyMode.follow,
+                                                    child: Text(
+                                                        'followSettings'.tr),
+                                                  ),
+                                                  DropdownMenuItem<
+                                                      RequestProxyMode>(
+                                                    value:
+                                                        RequestProxyMode.none,
+                                                    child: Text('noProxy'.tr),
+                                                  ),
+                                                  DropdownMenuItem<
+                                                      RequestProxyMode>(
+                                                    value:
+                                                        RequestProxyMode.custom,
+                                                    child:
+                                                        Text('customProxy'.tr),
+                                                  ),
+                                                ],
+                                              ))
+                                        ],
+                                      ),
+                                    ),
+                                    ...(controller.proxyConfig.value?.mode ==
+                                            RequestProxyMode.custom
+                                        ? [
+                                            SizedBox(
+                                              width: 150,
+                                              child: DropdownButtonFormField<
+                                                  String>(
+                                                value: controller
+                                                    .proxyConfig.value?.scheme,
+                                                onChanged: (value) async {
+                                                  if (value != null) {}
+                                                },
+                                                items: const [
+                                                  DropdownMenuItem<String>(
+                                                    value: 'http',
+                                                    child: Text('HTTP'),
+                                                  ),
+                                                  DropdownMenuItem<String>(
+                                                    value: 'https',
+                                                    child: Text('HTTPS'),
+                                                  ),
+                                                  DropdownMenuItem<String>(
+                                                    value: 'socks5',
+                                                    child: Text('SOCKS5'),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            Row(children: [
+                                              Flexible(
+                                                child: TextFormField(
+                                                  controller:
+                                                      _proxyIpController,
+                                                  decoration: InputDecoration(
+                                                    labelText: 'server'.tr,
+                                                    contentPadding:
+                                                        const EdgeInsets.all(
+                                                            0.0),
+                                                  ),
+                                                ),
+                                              ),
+                                              const Padding(
+                                                  padding: EdgeInsets.only(
+                                                      left: 10)),
+                                              Flexible(
+                                                child: TextFormField(
+                                                  controller:
+                                                      _proxyPortController,
+                                                  decoration: InputDecoration(
+                                                    labelText: 'port'.tr,
+                                                    contentPadding:
+                                                        const EdgeInsets.all(
+                                                            0.0),
+                                                  ),
+                                                  keyboardType:
+                                                      TextInputType.number,
+                                                  inputFormatters: [
+                                                    FilteringTextInputFormatter
+                                                        .digitsOnly,
+                                                    NumericalRangeFormatter(
+                                                        min: 0, max: 65535),
+                                                  ],
+                                                ),
+                                              ),
+                                            ]),
+                                            Row(children: [
+                                              Flexible(
+                                                child: TextFormField(
+                                                  controller:
+                                                      _proxyUsrController,
+                                                  decoration: InputDecoration(
+                                                    labelText: 'username'.tr,
+                                                    contentPadding:
+                                                        const EdgeInsets.all(
+                                                            0.0),
+                                                  ),
+                                                ),
+                                              ),
+                                              const Padding(
+                                                  padding: EdgeInsets.only(
+                                                      left: 10)),
+                                              Flexible(
+                                                child: TextFormField(
+                                                  controller:
+                                                      _proxyPwdController,
+                                                  decoration: InputDecoration(
+                                                    labelText: 'password'.tr,
+                                                    contentPadding:
+                                                        const EdgeInsets.all(
+                                                            0.0),
+                                                  ),
+                                                ),
+                                              ),
+                                            ])
+                                          ]
+                                        : const []),
+                                  ],
+                                ),
+                                const Divider(),
                                 TabBar(
                                   controller: controller.advancedTabController,
                                   tabs: const [
@@ -292,6 +456,22 @@ class CreateView extends GetView<CreateController> {
                                             decoration: const InputDecoration(
                                               labelText: 'Referer',
                                             )),
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(top: 10),
+                                          child: CompactCheckbox(
+                                            label: 'skipVerifyCert'.tr,
+                                            value:
+                                                _skipVerifyCertController.value,
+                                            onChanged: (bool? value) {
+                                              _skipVerifyCertController.value =
+                                                  value ?? false;
+                                            },
+                                            textStyle: const TextStyle(
+                                              color: Colors.grey,
+                                            ),
+                                          ),
+                                        ),
                                       ],
                                     ),
                                     Column(
@@ -300,7 +480,7 @@ class CreateView extends GetView<CreateController> {
                                             controller: _btTrackerController,
                                             maxLines: 5,
                                             decoration: InputDecoration(
-                                              labelText: 'Trakers',
+                                              labelText: 'Trackers',
                                               hintText: 'addTrackerHit'.tr,
                                             )),
                                       ],
@@ -321,23 +501,13 @@ class CreateView extends GetView<CreateController> {
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                TextButton(
-                                  onPressed: () {
-                                    controller.directDownload.value =
-                                        !controller.directDownload.value;
-                                  },
-                                  child: Row(children: [
-                                    Obx(() => Checkbox(
-                                          value:
-                                              controller.directDownload.value,
-                                          onChanged: (bool? value) {
-                                            controller.directDownload.value =
-                                                value ?? false;
-                                          },
-                                        )),
-                                    Text('directDownload'.tr),
-                                  ]),
-                                ),
+                                CompactCheckbox(
+                                    label: 'directDownload'.tr,
+                                    value: controller.directDownload.value,
+                                    onChanged: (bool? value) {
+                                      controller.directDownload.value =
+                                          value ?? false;
+                                    }),
                                 TextButton(
                                   onPressed: () {
                                     controller.showAdvanced.value =
@@ -405,7 +575,7 @@ class CreateView extends GetView<CreateController> {
             Util.isWeb() && controller.fileDataUri.isNotEmpty;
         final submitUrl = isWebFileChosen
             ? controller.fileDataUri.value
-            : _urlController.text;
+            : _urlController.text.trim();
 
         final urls = Util.textToLines(submitUrl);
         // Add url to the history
@@ -415,7 +585,7 @@ class CreateView extends GetView<CreateController> {
           }
         }
 
-        /* 
+        /*
         Check if is direct download, there has two ways to direct download
         1. Direct download option is checked
         2. Muli line urls
@@ -425,18 +595,26 @@ class CreateView extends GetView<CreateController> {
         if (isDirect) {
           await Future.wait(urls.map((url) {
             return createTask(CreateTask(
-                req: Request(url: url, extra: parseReqExtra(url)),
+                req: Request(
+                  url: url,
+                  extra: parseReqExtra(url),
+                  proxy: parseProxy(),
+                  skipVerifyCert: _skipVerifyCertController.value,
+                ),
                 opt: Options(
-                    name: isMultiLine ? "" : _renameController.text,
-                    path: _pathController.text,
-                    selectFiles: [],
-                    extra: parseReqOptsExtra())));
+                  name: isMultiLine ? "" : _renameController.text,
+                  path: _pathController.text,
+                  selectFiles: [],
+                  extra: parseReqOptsExtra(),
+                )));
           }));
           Get.rootDelegate.offNamed(Routes.TASK);
         } else {
           final rr = await resolve(Request(
             url: submitUrl,
             extra: parseReqExtra(_urlController.text),
+            proxy: parseProxy(),
+            skipVerifyCert: _skipVerifyCertController.value,
           ));
           await _showResolveDialog(rr);
         }
@@ -449,20 +627,39 @@ class CreateView extends GetView<CreateController> {
     }
   }
 
+  RequestProxy? parseProxy() {
+    if (controller.proxyConfig.value?.mode == RequestProxyMode.custom) {
+      return RequestProxy()
+        ..mode = RequestProxyMode.custom
+        ..scheme = _proxyIpController.text
+        ..host = "${_proxyIpController.text}:${_proxyPortController.text}"
+        ..usr = _proxyUsrController.text
+        ..pwd = _proxyPwdController.text;
+    }
+    return controller.proxyConfig.value;
+  }
+
   Object? parseReqExtra(String url) {
     Object? reqExtra;
     if (controller.showAdvanced.value) {
-      final u = Uri.parse(_urlController.text);
-      if (u.scheme.startsWith("http")) {
-        reqExtra = ReqExtraHttp()
-          ..header = {
+      switch (controller.advancedTabController.index) {
+        case 0:
+          final header = {
             "User-Agent": _httpUaController.text,
             "Cookie": _httpCookieController.text,
             "Referer": _httpRefererController.text,
           };
-      } else {
-        reqExtra = ReqExtraBt()
-          ..trackers = Util.textToLines(_btTrackerController.text);
+          header.removeWhere((key, value) => value.trim().isEmpty);
+          if (header.isNotEmpty) {
+            reqExtra = ReqExtraHttp()..header = header;
+          }
+          break;
+        case 1:
+          if (_btTrackerController.text.trim().isNotEmpty) {
+            reqExtra = ReqExtraBt()
+              ..trackers = Util.textToLines(_btTrackerController.text);
+          }
+          break;
       }
     }
     return reqExtra;
@@ -501,7 +698,13 @@ class CreateView extends GetView<CreateController> {
                     child: Form(
                         key: createFormKey,
                         autovalidateMode: AutovalidateMode.always,
-                        child: FileListView(files: rr.res.files)),
+                        child: FileTreeView(
+                          files: rr.res.files,
+                          initialValues: rr.res.files.asMap().keys.toList(),
+                          onSelectionChanged: (List<int> values) {
+                            controller.selectedIndexes.value = values;
+                          },
+                        )),
                   );
                 },
               ),
@@ -545,7 +748,7 @@ class CreateView extends GetView<CreateController> {
                                   controller.selectedIndexes.map((index) {
                                 final file = rr.res.files[index];
                                 return createTask(CreateTask(
-                                    req: file.req!,
+                                    req: file.req!..proxy = parseProxy(),
                                     opt: Options(
                                         name: file.name,
                                         path: path.join(_pathController.text,

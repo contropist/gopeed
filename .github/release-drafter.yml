@@ -11,12 +11,15 @@ categories:
       - 'fix'
       - 'bugfix'
       - 'bug'
+  - title: '🔧 Performance Improvements'
+    labels:
+      - 'perf'
   - title: '🧪 Tests'
     label: 'test'
   - title: '🧰 Maintenance'
     label: 'chore'
   - title: '📖 Document'
-    label: 'doc'
+    label: 'docs'
   - title: '🚀 CI/CD'
     label: 'ci'
   - title: '🌎 Internationalization'
@@ -34,7 +37,7 @@ version-resolver:
       - 'patch'
   default: patch
 template: |
-  # Changes
+  # Release notes
 
   $CHANGES
   

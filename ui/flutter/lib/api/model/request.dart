@@ -7,11 +7,15 @@ class Request {
   String url;
   Object? extra;
   Map<String, String>? labels = {};
+  RequestProxy? proxy;
+  bool skipVerifyCert = false;
 
   Request({
     required this.url,
     this.extra,
     this.labels,
+    this.proxy,
+    this.skipVerifyCert = false,
   });
 
   factory Request.fromJson(Map<String, dynamic> json) =>
@@ -44,4 +48,25 @@ class ReqExtraBt {
       _$ReqExtraBtFromJson(json);
 
   Map<String, dynamic> toJson() => _$ReqExtraBtToJson(this);
+}
+
+enum RequestProxyMode {
+  follow,
+  none,
+  custom,
+}
+
+@JsonSerializable()
+class RequestProxy {
+  RequestProxyMode mode = RequestProxyMode.follow;
+  String scheme = 'http';
+  String host = '';
+  String usr = '';
+  String pwd = '';
+
+  RequestProxy();
+
+  factory RequestProxy.fromJson(Map<String, dynamic> json) =>
+      _$RequestProxyFromJson(json);
+  Map<String, dynamic> toJson() => _$RequestProxyToJson(this);
 }

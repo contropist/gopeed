@@ -1,3 +1,5 @@
+# [![](_docs/img/banner.png)](https://gopeed.com)
+
 [![Trạng thái kiểm tra](https://github.com/GopeedLab/gopeed/workflows/test/badge.svg)](https://github.com/GopeedLab/gopeed/actions?query=workflow%3Atest)
 [![Codecov](https://codecov.io/gh/GopeedLab/gopeed/branch/main/graph/badge.svg)](https://codecov.io/gh/GopeedLab/gopeed)
 [![Phiên bản](https://img.shields.io/github/release/GopeedLab/gopeed.svg)](https://github.com/GopeedLab/gopeed/releases)
@@ -5,7 +7,7 @@
 [![Ủng hộ](https://img.shields.io/badge/%24-ủng%20hộ-ff69b4.svg)](https://docs.gopeed.com/donate.html)
 [![Discord](https://img.shields.io/discord/1037992631881449472?label=Discord&logo=discord&style=social)](https://discord.gg/ZUJqJrwCGB)
 
-![](_docs/img/banner.png)
+<a href="https://trendshift.io/repositories/7953" target="_blank"><img src="https://trendshift.io/api/badge/repositories/7953" alt="GopeedLab%2Fgopeed | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R6R6IJGN6)
 
@@ -53,11 +55,11 @@ Truy cập ✈ [Trang web chính thức](https://gopeed.com) | 📖 [Tài liệu
         </tr>
         <tr>
             <td><code>DEB</code></td>
-            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux.deb">Liên kết</a></td>
+            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux-amd64.deb">Liên kết</a></td>
         </tr>
         <tr>
             <td><code>AppImage</code></td>
-            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux-amd64.AppImage">Liên kết</a></td>
+            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux-x86_64.AppImage">Liên kết</a></td>
         </tr>
         <tr>
             <td>Android</td>
@@ -68,6 +70,11 @@ Truy cập ✈ [Trang web chính thức](https://gopeed.com) | 📖 [Tài liệu
             <td>iOS</td>
             <td><code>IPA</code></td>
             <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-ios.ipa">Liên kết</a></td>
+        </tr>
+        <tr>
+            <td>Qnap</td>
+            <td><code>QPKG</code></td>
+            <td><a href="https://gopeed.com/api/download?tpl=gopeed-qnap-$version-amd64.qpkg">Liên kết</a></td>
         </tr>
         <tr>
             <td>Web</td>
@@ -108,8 +115,8 @@ Dự án này được chia thành hai phần, phần giao diện sử dụng `f
 
 ### Environment
 
-1. Golang 1.21+
-2. Flutter 3.16+
+1. Golang 1.23+
+2. Flutter 3.24+
 
 ### Clone
 
@@ -168,7 +175,7 @@ command:
 - android
 
 ```bash
-gomobile bind -tags nosqlite -ldflags="-w -s" -o ui/flutter/android/app/libs/libgopeed.aar -target=android -androidapi 19 -javapkg=com.gopeed github.com/GopeedLab/gopeed/bind/mobile
+gomobile bind -tags nosqlite -ldflags="-w -s -checklinkname=0" -o ui/flutter/android/app/libs/libgopeed.aar -target=android -androidapi 21 -javapkg="com.gopeed" github.com/GopeedLab/gopeed/bind/mobile
 cd ui/flutter
 flutter build apk
 ```

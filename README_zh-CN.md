@@ -1,3 +1,5 @@
+# [![](_docs/img/banner.png)](https://gopeed.com)
+
 [![Test Status](https://github.com/GopeedLab/gopeed/workflows/test/badge.svg)](https://github.com/GopeedLab/gopeed/actions?query=workflow%3Atest)
 [![Codecov](https://codecov.io/gh/GopeedLab/gopeed/branch/main/graph/badge.svg)](https://codecov.io/gh/GopeedLab/gopeed)
 [![Release](https://img.shields.io/github/release/GopeedLab/gopeed.svg)](https://github.com/GopeedLab/gopeed/releases)
@@ -5,7 +7,7 @@
 [![Donate](https://img.shields.io/badge/%24-donate-ff69b4.svg)](https://docs.gopeed.com/zh/donate.html)
 [![Discord](https://img.shields.io/discord/1037992631881449472?label=Discord&logo=discord&style=social)](https://discord.gg/ZUJqJrwCGB)
 
-![](_docs/img/banner.png)
+<a href="https://trendshift.io/repositories/7953" target="_blank"><img src="https://trendshift.io/api/badge/repositories/7953" alt="GopeedLab%2Fgopeed | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R6R6IJGN6)
 
@@ -53,11 +55,11 @@ Gopeed（全称 Go Speed），直译过来中文名叫做`够快下载器`（不
         </tr>
         <tr>
             <td><code>DEB</code></td>
-            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux.deb">前往</a></td>
+            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux-amd64.deb">前往</a></td>
         </tr>
         <tr>
             <td><code>AppImage</code></td>
-            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux-amd64.AppImage">前往</a></td>
+            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux-x86_64.AppImage">前往</a></td>
         </tr>
         <tr>
             <td>Android</td>
@@ -68,6 +70,11 @@ Gopeed（全称 Go Speed），直译过来中文名叫做`够快下载器`（不
             <td>iOS</td>
             <td><code>IPA</code></td>
             <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-ios.ipa">前往</a></td>
+        </tr>
+        <tr>
+            <td>Qnap</td>
+            <td><code>QPKG</code></td>
+            <td><a href="https://gopeed.com/api/download?tpl=gopeed-qnap-$version-amd64.qpkg">前往</a></td>
         </tr>
         <tr>
             <td>Web</td>
@@ -92,6 +99,10 @@ Gopeed（全称 Go Speed），直译过来中文名叫做`够快下载器`（不
 go install github.com/GopeedLab/gopeed/cmd/gopeed@latest
 ```
 
+## 浏览器扩展
+
+Gopeed 还提供了浏览器扩展用于接管浏览器下载，支持 Chrome、Edge、Firefox 等浏览器，具体请参考：[https://github.com/GopeedLab/browser-extension](https://github.com/GopeedLab/browser-extension)
+
 ## 赞助
 
 如果觉得项目对你有帮助，请考虑[赞助](https://docs.gopeed.com/zh/donate)以支持这个项目的发展，非常感谢！
@@ -108,8 +119,8 @@ go install github.com/GopeedLab/gopeed/cmd/gopeed@latest
 
 ### 环境要求
 
-1. Golang 1.21+
-2. Flutter 3.16+
+1. Golang 1.23+
+2. Flutter 3.24+
 
 ### 克隆项目
 
@@ -168,7 +179,7 @@ gomobile init
 - android
 
 ```bash
-gomobile bind -tags nosqlite -ldflags="-w -s" -o ui/flutter/android/app/libs/libgopeed.aar -target=android -androidapi 19 -javapkg=com.gopeed github.com/GopeedLab/gopeed/bind/mobile
+gomobile bind -tags nosqlite -ldflags="-w -s -checklinkname=0" -o ui/flutter/android/app/libs/libgopeed.aar -target=android -androidapi 21 -javapkg="com.gopeed" github.com/GopeedLab/gopeed/bind/mobile
 cd ui/flutter
 flutter build apk
 ```
