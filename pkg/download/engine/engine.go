@@ -3,6 +3,7 @@ package engine
 import (
 	_ "embed"
 	"errors"
+	"github.com/GopeedLab/gopeed/pkg/base"
 	gojaerror "github.com/GopeedLab/gopeed/pkg/download/engine/inject/error"
 	"github.com/GopeedLab/gopeed/pkg/download/engine/inject/file"
 	"github.com/GopeedLab/gopeed/pkg/download/engine/inject/formdata"
@@ -11,7 +12,6 @@ import (
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/eventloop"
 	gojaurl "github.com/dop251/goja_nodejs/url"
-	"net/url"
 	"time"
 )
 
@@ -106,11 +106,11 @@ func (e *Engine) await(value any) {
 }
 
 func (e *Engine) Close() {
-	e.loop.Stop()
+	e.loop.StopNoWait()
 }
 
 type Config struct {
-	ProxyURL *url.URL
+	ProxyConfig *base.DownloaderProxyConfig
 }
 
 func NewEngine(cfg *Config) *Engine {
@@ -135,7 +135,7 @@ func NewEngine(cfg *Config) *Engine {
 		if err := formdata.Enable(runtime); err != nil {
 			return
 		}
-		if err := xhr.Enable(runtime, cfg.ProxyURL); err != nil {
+		if err := xhr.Enable(runtime, cfg.ProxyConfig.ToHandler()); err != nil {
 			return
 		}
 		if _, err := runtime.RunString(polyfillScript); err != nil {
@@ -143,6 +143,10 @@ func NewEngine(cfg *Config) *Engine {
 		}
 		// polyfill global
 		if err := runtime.Set("global", runtime.GlobalObject()); err != nil {
+			return
+		}
+		// polyfill window
+		if err := runtime.Set("window", runtime.GlobalObject()); err != nil {
 			return
 		}
 		// polyfill window.location
@@ -174,7 +178,15 @@ func resolveResult(value goja.Value) (any, error) {
 			if err, ok := p.Result().Export().(error); ok {
 				return nil, err
 			} else {
-				return nil, errors.New(p.Result().String())
+				stack := p.Result().String()
+				result := p.Result()
+				if ro, ok := result.(*goja.Object); ok {
+					stackVal := ro.Get("stack")
+					if stackVal != nil && stackVal.String() != "" {
+						stack = stackVal.String()
+					}
+				}
+				return nil, errors.New(stack)
 			}
 		}
 	}
