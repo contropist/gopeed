@@ -1,3 +1,5 @@
+# [![](_docs/img/banner.png)](https://gopeed.com)
+
 [![Trạng thái kiểm tra](https://github.com/GopeedLab/gopeed/workflows/test/badge.svg)](https://github.com/GopeedLab/gopeed/actions?query=workflow%3Atest)
 [![Codecov](https://codecov.io/gh/GopeedLab/gopeed/branch/main/graph/badge.svg)](https://codecov.io/gh/GopeedLab/gopeed)
 [![Phiên bản](https://img.shields.io/github/release/GopeedLab/gopeed.svg)](https://github.com/GopeedLab/gopeed/releases)
@@ -5,86 +7,130 @@
 [![Ủng hộ](https://img.shields.io/badge/%24-ủng%20hộ-ff69b4.svg)](https://docs.gopeed.com/donate.html)
 [![Discord](https://img.shields.io/discord/1037992631881449472?label=Discord&logo=discord&style=social)](https://discord.gg/ZUJqJrwCGB)
 
-![](_docs/img/banner.png)
+<a href="https://trendshift.io/repositories/7953" target="_blank"><img src="https://trendshift.io/api/badge/repositories/7953" alt="GopeedLab%2Fgopeed | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/R6R6IJGN6)
 
 [English](/README.md) | [中文](/README_zh-CN.md) | [日本語](/README_ja-JP.md) | [正體中文](/README_zh-TW.md) | [Tiếng Việt](/README_vi-VN.md)
 
-## Giới thiệu
+## 🚀 Giới thiệu
 
 Gopeed (tên đầy đủ Go Speed), một công cụ tải xuống tốc độ cao được phát triển bởi `Golang` + `Flutter`, hỗ trợ giao thức (HTTP, BitTorrent, Magnet) và hỗ trợ tất cả các nền tảng. Ngoài các chức năng tải xuống cơ bản, Gopeed còn là một công cụ tải xuống có thể tùy chỉnh cao cho phép triển khai thêm tính năng thông qua việc tích hợp với [APIs](https://docs.gopeed.com/dev-api.html) hoặc cài đặt và phát triển các [tiện ích mở rộng](https://docs.gopeed.com/dev-extension.html).
 
 Truy cập ✈ [Trang web chính thức](https://gopeed.com) | 📖 [Tài liệu chính thức](https://docs.gopeed.com)
 
-## Tải về
+## ⬇️ Tải về
 
 <table>
-    <thead>
-        <tr>
-            <th>Nền tảng</th>
-            <th>Loại gói</th>
-            <th>Liên kết tải xuống</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td rowspan=2>Windows</td>
-            <td><code>Bộ cài đặt EXE</code></td>
-            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-windows-amd64.zip">Liên kết</a></td>
-        </tr>
-        <tr>
-            <td><code>ZIP Portable</code></td>
-            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-windows-amd64-portable.zip">Liên kết</a></td>
-        </tr>
-        <tr>
-            <td>MacOS</td>
-            <td><code>Bộ cài đặt DMG</code></td>
-            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-macos.dmg">Liên kết</a></td>
-        </tr>
-        <tr>
-            <td rowspan=4>Linux</td>
-            <td><code>Flathub</code></td>
-            <td><a href="https://flathub.org/apps/com.gopeed.Gopeed">Liên kết</a></td>
-        </tr>
-        <tr>
-            <td><code>SNAP</code></td>
-            <td><a href="https://snapcraft.io/gopeed">Liên kết</a></td>
-        </tr>
-        <tr>
-            <td><code>DEB</code></td>
-            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux.deb">Liên kết</a></td>
-        </tr>
-        <tr>
-            <td><code>AppImage</code></td>
-            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux-amd64.AppImage">Liên kết</a></td>
-        </tr>
-        <tr>
-            <td>Android</td>
-            <td><code>APK</code></td>
-            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-android.apk">Liên kết</a></td>
-        </tr>
-        <tr>
-            <td>iOS</td>
-            <td><code>IPA</code></td>
-            <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-ios.ipa">Liên kết</a></td>
-        </tr>
-        <tr>
-            <td>Web</td>
-            <td></td>
-            <td><a href="https://github.com/GopeedLab/gopeed/releases/latest">Liên kết</a></td>
-        </tr>
-        <tr>
-            <td>Docker</td>
-            <td></td>
-            <td><a href="https://hub.docker.com/r/liwei2633/gopeed">Liên kết</a></td>
-        </tr>
-    </tbody>
+  <tbody>
+    <tr>
+      <td rowspan="2">🪟 Windows</td>
+      <td><code>EXE</code></td>
+      <td>amd64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-windows-amd64.zip">📥</a></td>
+    </tr>
+    <tr>
+      <td><code>Portable</code></td>
+      <td>amd64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-windows-amd64-portable.zip">📥</a></td>
+    </tr>
+    <tr>
+      <td>🍎 MacOS</td>
+      <td><code>DMG</code></td>
+      <td>universal</td>
+      <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-macos.dmg">📥</a></td>
+    </tr>
+    <tr>
+      <td rowspan="4">🐧 Linux</td>
+      <td><code>Flathub</code></td>
+      <td>amd64</td>
+      <td><a href="https://flathub.org/apps/com.gopeed.Gopeed">📥</a></td>
+    </tr>
+    <tr>
+      <td><code>SNAP</code></td>
+      <td>amd64</td>
+      <td><a href="https://snapcraft.io/gopeed">📥</a></td>
+    </tr>
+    <tr>
+      <td><code>DEB</code></td>
+      <td>amd64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux-amd64.deb">📥</a></td>
+    </tr>
+    <tr>
+      <td><code>AppImage</code></td>
+      <td>amd64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-linux-x86_64.AppImage">📥</a></td>
+    </tr>
+    <tr>
+      <td>🤖 Android</td>
+      <td><code>APK</code></td>
+      <td>universal</td>
+      <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-android.apk">📥</a></td>
+    </tr>
+    <tr>
+      <td>📱 iOS</td>
+      <td><code>IPA</code></td>
+      <td>universal</td>
+      <td><a href="https://gopeed.com/api/download?tpl=Gopeed-$version-ios.ipa">📥</a></td>
+    </tr>
+    <tr>
+      <td>🐳 Docker</td>
+      <td>-</td>
+      <td>universal</td>
+      <td><a href="https://hub.docker.com/r/liwei2633/gopeed">📥</a></td>
+    </tr>
+    <tr>
+      <td rowspan="2">💾 Qnap</td>
+      <td rowspan="2"><code>QPKG</code></td>
+      <td>amd64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=gopeed-$version-qnap-amd64.qpkg">📥</a></td>
+    </tr>
+    <tr>
+      <td>arm64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=gopeed-$version-qnap-arm64.qpkg">📥</a></td>
+    </tr>
+    <tr>
+      <td rowspan="8">🌐 Web</td>
+      <td rowspan="3"><code>Windows</code></td>
+      <td>amd64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=gopeed-web-$version-windows-amd64.zip">📥</a></td>
+    </tr>
+    <tr>
+      <td>arm64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=gopeed-web-$version-windows-arm64.zip">📥</a></td>
+    </tr>
+    <tr>
+      <td>386</td>
+      <td><a href="https://gopeed.com/api/download?tpl=gopeed-web-$version-windows-386.zip">📥</a></td>
+    </tr>
+    <tr>
+      <td rowspan="2"><code>MacOS</code></td>
+      <td>amd64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=gopeed-web-$version-macos-amd64.zip">📥</a></td>
+    </tr>
+    <tr>
+      <td>arm64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=gopeed-web-$version-macos-arm64.zip">📥</a></td>
+    </tr>
+    <tr>
+      <td rowspan="3"><code>Linux</code></td>
+      <td>amd64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=gopeed-web-$version-linux-amd64.zip">📥</a></td>
+    </tr>
+    <tr>
+      <td>arm64</td>
+      <td><a href="https://gopeed.com/api/download?tpl=gopeed-web-$version-linux-arm64.zip">📥</a></td>
+    </tr>
+    <tr>
+      <td>386</td>
+      <td><a href="https://gopeed.com/api/download?tpl=gopeed-web-$version-linux-386.zip">📥</a></td>
+    </tr>
+  </tbody>
 </table>
 
 Thêm thông tin về cài đặt, vui lòng tham khảo [Cài đặt](https://docs.gopeed.com/install.html)
 
-### Command tool
+### 🛠️ Công cụ lệnh
 
 Sử dụng `go install`:
 
@@ -92,36 +138,36 @@ Sử dụng `go install`:
 go install github.com/GopeedLab/gopeed/cmd/gopeed@latest
 ```
 
-## Quyên góp
+## 💝 Quyên góp
 
 Nếu bạn thích dự án này, xin vui lòng xem xét [quyên góp](https://docs.gopeed.com/donate.html) để hỗ trợ phát triển dự án này, cảm ơn bạn!
 
-## Trưng bày
+## 🖼️ Trưng bày
 
 ![](_docs/img/ui-demo.png)
 
-## Development
+## 👨‍💻 Development
 
 Dự án này được chia thành hai phần, phần giao diện sử dụng `flutter`, phần backend sử dụng `Golang`, và hai phía giao tiếp thông qua giao thức `http`. Trên hệ thống unix, sử dụng `unix socket`, và trên hệ thống windows, sử dụng giao thức `tcp`.
 
 > Mã giao diện nằm trong thư mục `ui/flutter`.
 
-### Environment
+### 🌍 Environment
 
-1. Golang 1.21+
-2. Flutter 3.16+
+1. Golang 1.23+
+2. Flutter 3.24+
 
-### Clone
+### 📋 Clone
 
 ```bash
 git clone git@github.com:GopeedLab/gopeed.git
 ```
 
-### Đóng góp
+### 🤝 Đóng góp
 
 Vui lòng tham khảo [CONTRIBUTING_vi-VN.md](/CONTRIBUTING_vi-VN.md)
 
-### Xây dựng
+### 🏗️ Xây dựng
 
 #### Desktop
 
@@ -168,7 +214,7 @@ command:
 - android
 
 ```bash
-gomobile bind -tags nosqlite -ldflags="-w -s" -o ui/flutter/android/app/libs/libgopeed.aar -target=android -androidapi 19 -javapkg=com.gopeed github.com/GopeedLab/gopeed/bind/mobile
+gomobile bind -tags nosqlite -ldflags="-w -s -checklinkname=0" -o ui/flutter/android/app/libs/libgopeed.aar -target=android -androidapi 21 -javapkg="com.gopeed" github.com/GopeedLab/gopeed/bind/mobile
 cd ui/flutter
 flutter build apk
 ```
@@ -194,7 +240,7 @@ cp -r ui/flutter/build/web cmd/web/dist
 go build -tags nosqlite,web -ldflags="-s -w" -o bin/ github.com/GopeedLab/gopeed/cmd/web
 ```
 
-## Tín dụng
+## ❤️ Tín dụng
 
 ### Người đóng góp
 
