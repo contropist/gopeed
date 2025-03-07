@@ -19,31 +19,42 @@ import (
 )
 
 var (
-	srv *http.Server
+	srv         *http.Server
+	runningPort int
 
 	Downloader *download.Downloader
 )
 
-func Start(startCfg *model.StartConfig) (int, error) {
-	srv, listener, err := BuildServer(startCfg)
+func Start(startCfg *model.StartConfig) (port int, err error) {
+	// avoid repeat start
+	if srv != nil {
+		return runningPort, nil
+	}
+
+	var listener net.Listener
+	srv, listener, err = BuildServer(startCfg)
 	if err != nil {
-		return 0, err
+		return
 	}
 
 	go func() {
-		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			panic(err)
 		}
 	}()
 
-	port := 0
 	if addr, ok := listener.Addr().(*net.TCPAddr); ok {
 		port = addr.Port
+		runningPort = port
 	}
-	return port, nil
+	return
 }
 
 func Stop() {
+	defer func() {
+		srv = nil
+	}()
+
 	if srv != nil {
 		if err := srv.Shutdown(context.TODO()); err != nil {
 			Downloader.Logger.Warn().Err(err).Msg("shutdown server failed")
@@ -88,12 +99,14 @@ func BuildServer(startCfg *model.StartConfig) (*http.Server, net.Listener, error
 	}
 
 	var r = mux.NewRouter()
+	r.Methods(http.MethodGet).Path("/api/v1/info").HandlerFunc(Info)
 	r.Methods(http.MethodPost).Path("/api/v1/resolve").HandlerFunc(Resolve)
 	r.Methods(http.MethodPost).Path("/api/v1/tasks").HandlerFunc(CreateTask)
+	r.Methods(http.MethodPost).Path("/api/v1/tasks/batch").HandlerFunc(CreateTaskBatch)
 	r.Methods(http.MethodPut).Path("/api/v1/tasks/{id}/pause").HandlerFunc(PauseTask)
+	r.Methods(http.MethodPut).Path("/api/v1/tasks/pause").HandlerFunc(PauseTasks)
 	r.Methods(http.MethodPut).Path("/api/v1/tasks/{id}/continue").HandlerFunc(ContinueTask)
-	r.Methods(http.MethodPut).Path("/api/v1/tasks/pause").HandlerFunc(PauseAllTask)
-	r.Methods(http.MethodPut).Path("/api/v1/tasks/continue").HandlerFunc(ContinueAllTask)
+	r.Methods(http.MethodPut).Path("/api/v1/tasks/continue").HandlerFunc(ContinueTasks)
 	r.Methods(http.MethodDelete).Path("/api/v1/tasks/{id}").HandlerFunc(DeleteTask)
 	r.Methods(http.MethodDelete).Path("/api/v1/tasks").HandlerFunc(DeleteTasks)
 	r.Methods(http.MethodGet).Path("/api/v1/tasks/{id}").HandlerFunc(GetTask)
@@ -141,7 +154,7 @@ func BuildServer(startCfg *model.StartConfig) (*http.Server, net.Listener, error
 			defer func() {
 				if v := recover(); v != nil {
 					err := errors.WithStack(fmt.Errorf("%v", v))
-					Downloader.Logger.Error().Stack().Err(err).Msg("http server panic")
+					Downloader.Logger.Error().Stack().Err(err).Msgf("http server panic: %s %s", r.Method, r.RequestURI)
 					WriteJson(w, model.NewErrorResult(err.Error(), model.CodeError))
 				}
 			}()
