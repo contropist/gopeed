@@ -1,14 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:get/get.dart';
-import 'package:gopeed/database/entity.dart';
-import 'package:lecle_downloads_path_provider/lecle_downloads_path_provider.dart';
+import 'package:launch_at_startup/launch_at_startup.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:share_handler/share_handler.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:uri_to_file/uri_to_file.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -16,14 +17,20 @@ import 'package:window_manager/window_manager.dart';
 
 import '../../../../api/api.dart';
 import '../../../../api/model/downloader_config.dart';
+import '../../../../api/model/request.dart';
 import '../../../../core/common/start_config.dart';
+import '../../../../core/libgopeed_boot.dart';
 import '../../../../database/database.dart';
+import '../../../../database/entity.dart';
 import '../../../../i18n/message.dart';
+import '../../../../main.dart';
 import '../../../../util/locale_manager.dart';
 import '../../../../util/log_util.dart';
 import '../../../../util/package_info.dart';
 import '../../../../util/util.dart';
 import '../../../routes/app_pages.dart';
+import '../../create/dto/create_router_params.dart';
+import '../../redirect/views/redirect_view.dart';
 
 const unixSocketPath = 'gopeed.sock';
 
@@ -73,6 +80,7 @@ final allTrackerSubscribeUrlCdns = Map.fromIterable(allTrackerSubscribeUrls,
 class AppController extends GetxController with WindowListener, TrayListener {
   static StartConfig? _defaultStartConfig;
 
+  final autoStartup = false.obs;
   final startConfig = StartConfig().obs;
   final runningPort = 0.obs;
   final downloaderConfig = DownloaderConfig().obs;
@@ -98,12 +106,16 @@ class AppController extends GetxController with WindowListener, TrayListener {
 
     _initTrackerUpdate().onError((error, stackTrace) =>
         logger.w("initTrackerUpdate error", error, stackTrace));
+
+    _initLaunchAtStartup().onError((error, stackTrace) =>
+        logger.w("initLaunchAtStartup error", error, stackTrace));
   }
 
   @override
   void onClose() {
     _linkSubscription?.cancel();
     trayManager.removeListener(this);
+    LibgopeedBoot.instance.stop();
   }
 
   @override
@@ -112,6 +124,12 @@ class AppController extends GetxController with WindowListener, TrayListener {
     if (isPreventClose) {
       windowManager.hide();
     }
+  }
+
+  // According to the system_manager document, make sure to call setState once on the onWindowFocus event.
+  @override
+  void onWindowFocus() {
+    refresh();
   }
 
   @override
@@ -146,22 +164,46 @@ class AppController extends GetxController with WindowListener, TrayListener {
   }
 
   Future<void> _initDeepLinks() async {
-    // currently only support android
-    if (!Util.isAndroid()) {
+    if (Util.isWeb()) {
       return;
     }
 
-    _appLinks = AppLinks();
+    // Handle deep link
+    () async {
+      _appLinks = AppLinks();
 
-    // Handle link when app is in warm state (front or background)
-    _linkSubscription = _appLinks.uriLinkStream.listen((uri) async {
-      await _toCreate(uri);
-    });
+      // Handle link when app is in warm state (front or background)
+      _linkSubscription = _appLinks.uriLinkStream.listen((uri) async {
+        await _handleDeepLink(uri);
+      });
 
-    // Check initial link if app was in cold state (terminated)
-    final uri = await _appLinks.getInitialAppLink();
-    if (uri != null) {
-      await _toCreate(uri);
+      // Check initial link if app was in cold state (terminated)
+      final uri = await _appLinks.getInitialLink();
+      if (uri != null) {
+        await _handleDeepLink(uri);
+      }
+    }();
+
+    // Handle shared media, e.g. shared link from browser
+    if (Util.isMobile()) {
+      () async {
+        final handler = ShareHandlerPlatform.instance;
+
+        handler.sharedMediaStream.listen((SharedMedia media) {
+          if (media.content?.isNotEmpty == true) {
+            final uri = Uri.parse(media.content!);
+            // content uri will be handled by the app_links plugin
+            if (uri.scheme != "content") {
+              _handleDeepLink(uri);
+            }
+          }
+        });
+
+        final media = await handler.getInitialSharedMedia();
+        if (media?.content?.isNotEmpty == true) {
+          _handleDeepLink(Uri.parse(media!.content!));
+        }
+      }();
     }
   }
 
@@ -181,10 +223,20 @@ class AppController extends GetxController with WindowListener, TrayListener {
     } else if (Util.isMacos()) {
       await trayManager.setIcon('assets/tray_icon/icon_mac.png',
           isTemplate: true);
+    } else if (Platform.environment.containsKey('FLATPAK_ID') ||
+        Platform.environment.containsKey('SNAP')) {
+      await trayManager.setIcon('com.gopeed.Gopeed');
     } else {
       await trayManager.setIcon('assets/tray_icon/icon.png');
     }
     final menu = Menu(items: [
+      MenuItem(
+        label: "show".tr,
+        onClick: (menuItem) async => {
+          await windowManager.show(),
+        },
+      ),
+      MenuItem.separator(),
       MenuItem(
         label: "create".tr,
         onClick: (menuItem) async => {
@@ -192,14 +244,13 @@ class AppController extends GetxController with WindowListener, TrayListener {
           await Get.rootDelegate.offAndToNamed(Routes.CREATE),
         },
       ),
-      MenuItem.separator(),
       MenuItem(
         label: "startAll".tr,
-        onClick: (menuItem) async => {continueAllTasks()},
+        onClick: (menuItem) async => {continueAllTasks(null)},
       ),
       MenuItem(
         label: "pauseAll".tr,
-        onClick: (menuItem) async => {pauseAllTasks()},
+        onClick: (menuItem) async => {pauseAllTasks(null)},
       ),
       MenuItem(
         label: 'setting'.tr,
@@ -222,7 +273,14 @@ class AppController extends GetxController with WindowListener, TrayListener {
       MenuItem.separator(),
       MenuItem(
         label: 'exit'.tr,
-        onClick: (menuItem) => {windowManager.destroy()},
+        onClick: (menuItem) async {
+          try {
+            await LibgopeedBoot.instance.stop();
+          } catch (e) {
+            logger.w("libgopeed stop fail", e);
+          }
+          windowManager.destroy();
+        },
       ),
     ]);
     if (!Util.isLinux()) {
@@ -240,16 +298,12 @@ class AppController extends GetxController with WindowListener, TrayListener {
 
     FlutterForegroundTask.init(
       androidNotificationOptions: AndroidNotificationOptions(
-          channelId: 'gopeed_service',
-          channelName: 'Gopeed Background Service',
-          channelImportance: NotificationChannelImportance.LOW,
-          showWhen: true,
-          priority: NotificationPriority.LOW,
-          iconData: const NotificationIconData(
-            resType: ResourceType.mipmap,
-            resPrefix: ResourcePrefix.ic,
-            name: 'launcher',
-          )),
+        channelId: 'gopeed_service',
+        channelName: 'Gopeed Background Service',
+        channelImportance: NotificationChannelImportance.LOW,
+        showWhen: true,
+        priority: NotificationPriority.LOW,
+      ),
       iosNotificationOptions: const IOSNotificationOptions(
         showNotification: true,
         playSound: false,
@@ -269,15 +323,50 @@ class AppController extends GetxController with WindowListener, TrayListener {
       FlutterForegroundTask.startService(
         notificationTitle: "serviceTitle".tr,
         notificationText: "serviceText".tr,
+        notificationIcon: const NotificationIconData(
+          resType: ResourceType.mipmap,
+          resPrefix: ResourcePrefix.ic,
+          name: 'launcher',
+        ),
       );
     }
   }
 
-  Future<void> _toCreate(Uri uri) async {
-    final path = uri.scheme == "magnet"
-        ? uri.toString()
-        : (await toFile(uri.toString())).path;
-    await Get.rootDelegate.offAndToNamed(Routes.CREATE, arguments: path);
+  Future<void> _handleDeepLink(Uri uri) async {
+    if (uri.scheme == "gopeed") {
+      if (uri.path == "/create") {
+        final params = uri.queryParameters["params"];
+        if (params?.isNotEmpty == true) {
+          final safeParams = params!.replaceAll(" ", "+");
+          final paramsJson =
+              String.fromCharCodes(base64Decode(base64.normalize(safeParams)));
+          Get.rootDelegate.offAndToNamed(Routes.REDIRECT,
+              arguments: RedirectArgs(Routes.CREATE,
+                  arguments:
+                      CreateRouterParams.fromJson(jsonDecode(paramsJson))));
+          return;
+        }
+        Get.rootDelegate.offAndToNamed(Routes.CREATE);
+        return;
+      }
+      Get.rootDelegate.offAndToNamed(Routes.HOME);
+      return;
+    }
+
+    String path;
+    if (uri.scheme == "magnet" ||
+        uri.scheme == "http" ||
+        uri.scheme == "https") {
+      path = uri.toString();
+    } else if (uri.scheme == "file") {
+      path =
+          Util.isWindows() ? Uri.decodeFull(uri.path.substring(1)) : uri.path;
+    } else {
+      path = (await toFile(uri.toString())).path;
+    }
+    Get.rootDelegate.offAndToNamed(Routes.REDIRECT,
+        arguments: RedirectArgs(Routes.CREATE,
+            arguments: CreateRouterParams(req: Request(url: path))));
   }
 
   String runningAddress() {
@@ -305,22 +394,24 @@ class AppController extends GetxController with WindowListener, TrayListener {
     return _defaultStartConfig!;
   }
 
-  Future<void> loadStartConfig() async {
+  Future<StartConfig> loadStartConfig() async {
     final defaultCfg = await _initDefaultStartConfig();
     final saveCfg = Database.instance.getStartConfig();
     startConfig.value.network = saveCfg?.network ?? defaultCfg.network;
     startConfig.value.address = saveCfg?.address ?? defaultCfg.address;
     startConfig.value.apiToken = saveCfg?.apiToken ?? defaultCfg.apiToken;
+    return startConfig.value;
   }
 
-  Future<void> loadDownloaderConfig() async {
+  Future<DownloaderConfig> loadDownloaderConfig() async {
     try {
       downloaderConfig.value = await getConfig();
     } catch (e) {
-      logger.w("load downloader config fail", e);
+      logger.w("load downloader config fail", e, StackTrace.current);
       downloaderConfig.value = DownloaderConfig();
     }
     await _initDownloaderConfig();
+    return downloaderConfig.value;
   }
 
   Future<void> trackerUpdate() async {
@@ -413,18 +504,25 @@ class AppController extends GetxController with WindowListener, TrayListener {
       if (Util.isDesktop()) {
         config.downloadDir = (await getDownloadsDirectory())?.path ?? "./";
       } else if (Util.isAndroid()) {
-        final downloadDir = (await DownloadsPath.downloadsDirectory())?.path;
-        if (downloadDir != null) {
-          config.downloadDir = '$downloadDir/Gopeed';
-        } else {
-          config.downloadDir = (await getApplicationDocumentsDirectory()).path;
-        }
+        config.downloadDir = (await getExternalStorageDirectory())?.path ??
+            (await getApplicationDocumentsDirectory()).path;
       } else if (Util.isIOS()) {
         config.downloadDir = (await getApplicationDocumentsDirectory()).path;
       } else {
         config.downloadDir = './';
       }
     }
+  }
+
+  Future<void> _initLaunchAtStartup() async {
+    if (!Util.isWindows() && !Util.isLinux()) {
+      return;
+    }
+    launchAtStartup.setup(
+        appName: packageInfo.appName,
+        appPath: Platform.resolvedExecutable,
+        args: ['--${Args.flagHidden}']);
+    autoStartup.value = await launchAtStartup.isEnabled();
   }
 
   Future<void> saveConfig() async {

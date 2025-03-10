@@ -9,7 +9,7 @@ part of 'downloader_config.dart';
 DownloaderConfig _$DownloaderConfigFromJson(Map<String, dynamic> json) =>
     DownloaderConfig(
       downloadDir: json['downloadDir'] as String? ?? '',
-      maxRunning: json['maxRunning'] as int? ?? 0,
+      maxRunning: (json['maxRunning'] as num?)?.toInt() ?? 0,
     )
       ..protocolConfig = ProtocolConfig.fromJson(
           json['protocolConfig'] as Map<String, dynamic>?)
@@ -37,9 +37,8 @@ Map<String, dynamic> _$ProtocolConfigToJson(ProtocolConfig instance) =>
     };
 
 HttpConfig _$HttpConfigFromJson(Map<String, dynamic> json) => HttpConfig(
-      userAgent: json['userAgent'] as String? ??
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
-      connections: json['connections'] as int? ?? 16,
+      userAgent: json['userAgent'] as String? ?? '',
+      connections: (json['connections'] as num?)?.toInt() ?? 0,
       useServerCtime: json['useServerCtime'] as bool? ?? false,
     );
 
@@ -50,30 +49,46 @@ Map<String, dynamic> _$HttpConfigToJson(HttpConfig instance) =>
       'useServerCtime': instance.useServerCtime,
     };
 
-BtConfig _$BtConfigFromJson(Map<String, dynamic> json) => BtConfig()
-  ..listenPort = json['listenPort'] as int
-  ..trackers =
-      (json['trackers'] as List<dynamic>).map((e) => e as String).toList();
+BtConfig _$BtConfigFromJson(Map<String, dynamic> json) => BtConfig(
+      listenPort: (json['listenPort'] as num?)?.toInt() ?? 0,
+      trackers: (json['trackers'] as List<dynamic>?)
+              ?.map((e) => e as String)
+              .toList() ??
+          const [],
+      seedKeep: json['seedKeep'] as bool? ?? false,
+      seedRatio: (json['seedRatio'] as num?)?.toDouble() ?? 0,
+      seedTime: (json['seedTime'] as num?)?.toInt() ?? 0,
+    );
 
 Map<String, dynamic> _$BtConfigToJson(BtConfig instance) => <String, dynamic>{
       'listenPort': instance.listenPort,
       'trackers': instance.trackers,
+      'seedKeep': instance.seedKeep,
+      'seedRatio': instance.seedRatio,
+      'seedTime': instance.seedTime,
     };
 
-ExtraConfig _$ExtraConfigFromJson(Map<String, dynamic> json) => ExtraConfig()
-  ..themeMode = json['themeMode'] as String
-  ..locale = json['locale'] as String
-  ..bt = ExtraConfigBt.fromJson(json['bt'] as Map<String, dynamic>);
+ExtraConfig _$ExtraConfigFromJson(Map<String, dynamic> json) => ExtraConfig(
+      themeMode: json['themeMode'] as String? ?? '',
+      locale: json['locale'] as String? ?? '',
+      lastDeleteTaskKeep: json['lastDeleteTaskKeep'] as bool? ?? false,
+      defaultDirectDownload: json['defaultDirectDownload'] as bool? ?? false,
+      defaultBtClient: json['defaultBtClient'] as bool? ?? true,
+    )..bt = ExtraConfigBt.fromJson(json['bt'] as Map<String, dynamic>);
 
 Map<String, dynamic> _$ExtraConfigToJson(ExtraConfig instance) =>
     <String, dynamic>{
       'themeMode': instance.themeMode,
       'locale': instance.locale,
+      'lastDeleteTaskKeep': instance.lastDeleteTaskKeep,
+      'defaultDirectDownload': instance.defaultDirectDownload,
+      'defaultBtClient': instance.defaultBtClient,
       'bt': instance.bt.toJson(),
     };
 
 ProxyConfig _$ProxyConfigFromJson(Map<String, dynamic> json) => ProxyConfig(
       enable: json['enable'] as bool? ?? false,
+      system: json['system'] as bool? ?? false,
       scheme: json['scheme'] as String? ?? '',
       host: json['host'] as String? ?? '',
       usr: json['usr'] as String? ?? '',
@@ -83,6 +98,7 @@ ProxyConfig _$ProxyConfigFromJson(Map<String, dynamic> json) => ProxyConfig(
 Map<String, dynamic> _$ProxyConfigToJson(ProxyConfig instance) =>
     <String, dynamic>{
       'enable': instance.enable,
+      'system': instance.system,
       'scheme': instance.scheme,
       'host': instance.host,
       'usr': instance.usr,
