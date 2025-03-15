@@ -68,3 +68,8 @@ windows/flutter/generated_plugins.cmake
 # Hive database files
 database.hive
 database.lock
+
+assets/exec/host
+assets/exec/host.exe
+assets/exec/updater
+assets/exec/updater.exe

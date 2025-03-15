@@ -2,23 +2,18 @@ package util
 
 import (
 	"encoding/base64"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 )
 
-const FileSchema = "FILE"
-
 func ParseSchema(url string) string {
 	index := strings.Index(url, ":")
-	// if no schema or windows path like C:\a.txt, return FILE
 	if index == -1 || index == 1 {
-		return FileSchema
+		return ""
 	}
 	schema := url[:index]
-	if schema == "data" {
-		schema, _ = ParseDataUri(url)
-	}
 	return strings.ToUpper(schema)
 }
 
@@ -31,7 +26,6 @@ func ParseDataUri(uri string) (string, []byte) {
 	}
 	mime := matches[1]
 	base64Data := matches[2]
-	// 解码Base64数据
 	data, err := base64.StdEncoding.DecodeString(base64Data)
 	if err != nil {
 		return "", nil
@@ -50,4 +44,15 @@ func BuildProxyUrl(scheme, host, usr, pwd string) *url.URL {
 		User:   user,
 		Host:   host,
 	}
+}
+
+// ProxyUrlToHandler gets the proxy handler from the proxy url.
+func ProxyUrlToHandler(proxyUrl *url.URL) func(*http.Request) (*url.URL, error) {
+	if proxyUrl == nil {
+		return nil
+	}
+	if proxyUrl.Scheme == "system" {
+		return http.ProxyFromEnvironment
+	}
+	return http.ProxyURL(proxyUrl)
 }
