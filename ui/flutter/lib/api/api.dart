@@ -3,19 +3,20 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
-import 'package:gopeed/api/model/extension.dart';
-import 'package:gopeed/api/model/install_extension.dart';
-import 'package:gopeed/api/model/switch_extension.dart';
 
 import '../util/util.dart';
 import 'model/create_task.dart';
+import 'model/create_task_batch.dart';
 import 'model/downloader_config.dart';
+import 'model/extension.dart';
+import 'model/install_extension.dart';
 import 'model/request.dart';
 import 'model/resolve_result.dart';
 import 'model/result.dart';
+import 'model/switch_extension.dart';
 import 'model/task.dart';
-import 'model/update_extension_settings.dart';
 import 'model/update_check_extension_resp.dart';
+import 'model/update_extension_settings.dart';
 
 class _Client {
   static _Client? _instance;
@@ -114,6 +115,12 @@ Future<String> createTask(CreateTask createTask) async {
       (data) => data as String);
 }
 
+Future<List<String>> createTaskBatch(CreateTaskBatch createTaskBatch) async {
+  return _parse<List<String>>(
+      () => _client.dio.post("/api/v1/tasks/batch", data: createTaskBatch),
+      (data) => (data as List).map((e) => e as String).toList());
+}
+
 Future<List<Task>> getTasks(List<Status> statuses) async {
   return _parse<List<Task>>(
       () => _client.dio.get(
@@ -129,17 +136,34 @@ Future<void> continueTask(String id) async {
   return _parse(() => _client.dio.put("/api/v1/tasks/$id/continue"), null);
 }
 
-Future<void> pauseAllTasks() async {
-  return _parse(() => _client.dio.put("/api/v1/tasks/pause"), null);
+Future<void> pauseAllTasks(List<String>? ids) async {
+  return _parse(
+      () => _client.dio.put("/api/v1/tasks/pause", queryParameters: {
+            "id": ids,
+          }),
+      null);
 }
 
-Future<void> continueAllTasks() async {
-  return _parse(() => _client.dio.put("/api/v1/tasks/continue"), null);
+Future<void> continueAllTasks(List<String>? ids) async {
+  return _parse(
+      () => _client.dio.put("/api/v1/tasks/continue", queryParameters: {
+            "id": ids,
+          }),
+      null);
 }
 
 Future<void> deleteTask(String id, bool force) async {
   return _parse(
       () => _client.dio.delete("/api/v1/tasks/$id?force=$force"), null);
+}
+
+Future<void> deleteTasks(List<String>? ids, bool force) async {
+  return _parse(
+      () => _client.dio.delete("/api/v1/tasks", queryParameters: {
+            "id": ids,
+            "force": force,
+          }),
+      null);
 }
 
 Future<DownloaderConfig> getConfig() async {
