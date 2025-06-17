@@ -3,19 +3,20 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
-import 'package:gopeed/api/model/extension.dart';
-import 'package:gopeed/api/model/install_extension.dart';
-import 'package:gopeed/api/model/switch_extension.dart';
 
 import '../util/util.dart';
 import 'model/create_task.dart';
+import 'model/create_task_batch.dart';
 import 'model/downloader_config.dart';
+import 'model/extension.dart';
+import 'model/install_extension.dart';
 import 'model/request.dart';
 import 'model/resolve_result.dart';
 import 'model/result.dart';
+import 'model/switch_extension.dart';
 import 'model/task.dart';
-import 'model/update_extension_settings.dart';
 import 'model/update_check_extension_resp.dart';
+import 'model/update_extension_settings.dart';
 
 class _Client {
   static _Client? _instance;
@@ -29,12 +30,12 @@ class _Client {
       _instance = _Client._internal();
       var dio = Dio();
       final isUnixSocket = network == 'unix';
-      var baseUrl = 'http://127.0.0.1';
+      var baseUrl = 'http://127.0.0.1/';
       if (!isUnixSocket) {
         if (Util.isWeb()) {
-          baseUrl = kDebugMode ? 'http://127.0.0.1:9999' : '';
+          baseUrl = kDebugMode ? 'http://127.0.0.1:9999/' : '';
         } else {
-          baseUrl = 'http://$address';
+          baseUrl = 'http://$address/';
         }
       }
       dio.options.baseUrl = baseUrl;
@@ -104,14 +105,20 @@ Future<T> _parse<T>(
 
 Future<ResolveResult> resolve(Request request) async {
   return _parse<ResolveResult>(
-      () => _client.dio.post("/api/v1/resolve", data: request),
+      () => _client.dio.post("api/v1/resolve", data: request),
       (data) => ResolveResult.fromJson(data));
 }
 
 Future<String> createTask(CreateTask createTask) async {
   return _parse<String>(
-      () => _client.dio.post("/api/v1/tasks", data: createTask),
+      () => _client.dio.post("api/v1/tasks", data: createTask),
       (data) => data as String);
+}
+
+Future<List<String>> createTaskBatch(CreateTaskBatch createTaskBatch) async {
+  return _parse<List<String>>(
+      () => _client.dio.post("api/v1/tasks/batch", data: createTaskBatch),
+      (data) => (data as List).map((e) => e as String).toList());
 }
 
 Future<List<Task>> getTasks(List<Status> statuses) async {
@@ -122,50 +129,67 @@ Future<List<Task>> getTasks(List<Status> statuses) async {
 }
 
 Future<void> pauseTask(String id) async {
-  return _parse(() => _client.dio.put("/api/v1/tasks/$id/pause"), null);
+  return _parse(() => _client.dio.put("api/v1/tasks/$id/pause"), null);
 }
 
 Future<void> continueTask(String id) async {
-  return _parse(() => _client.dio.put("/api/v1/tasks/$id/continue"), null);
+  return _parse(() => _client.dio.put("api/v1/tasks/$id/continue"), null);
 }
 
-Future<void> pauseAllTasks() async {
-  return _parse(() => _client.dio.put("/api/v1/tasks/pause"), null);
+Future<void> pauseAllTasks(List<String>? ids) async {
+  return _parse(
+      () => _client.dio.put("api/v1/tasks/pause", queryParameters: {
+            "id": ids,
+          }),
+      null);
 }
 
-Future<void> continueAllTasks() async {
-  return _parse(() => _client.dio.put("/api/v1/tasks/continue"), null);
+Future<void> continueAllTasks(List<String>? ids) async {
+  return _parse(
+      () => _client.dio.put("api/v1/tasks/continue", queryParameters: {
+            "id": ids,
+          }),
+      null);
 }
 
 Future<void> deleteTask(String id, bool force) async {
   return _parse(
-      () => _client.dio.delete("/api/v1/tasks/$id?force=$force"), null);
+      () => _client.dio.delete("api/v1/tasks/$id?force=$force"), null);
+}
+
+Future<void> deleteTasks(List<String>? ids, bool force) async {
+  return _parse(
+      () => _client.dio.delete("api/v1/tasks", queryParameters: {
+            "id": ids,
+            "force": force,
+          }),
+      null);
 }
 
 Future<DownloaderConfig> getConfig() async {
-  return _parse(() => _client.dio.get("/api/v1/config"),
+  return _parse(() => _client.dio.get("api/v1/config"),
       (data) => DownloaderConfig.fromJson(data));
 }
 
 Future<void> putConfig(DownloaderConfig config) async {
-  return _parse(() => _client.dio.put("/api/v1/config", data: config), null);
+  return _parse(() => _client.dio.put("api/v1/config", data: config), null);
 }
 
 Future<void> installExtension(InstallExtension installExtension) async {
   return _parse(
-      () => _client.dio.post("/api/v1/extensions", data: installExtension),
+      () => _client.dio.post("api/v1/extensions", data: installExtension),
       null);
 }
 
 Future<List<Extension>> getExtensions() async {
-  return _parse<List<Extension>>(() => _client.dio.get("/api/v1/extensions"),
+  return _parse<List<Extension>>(() => _client.dio.get("api/v1/extensions"),
       (data) => (data as List).map((e) => Extension.fromJson(e)).toList());
 }
 
 Future<void> updateExtensionSettings(
     String identity, UpdateExtensionSettings updateExtensionSettings) async {
   return _parse(
-      () => _client.dio.put("/api/v1/extensions/$identity/settings",
+      () => _client.dio.put("api/v1/extensions/$identity/settings",
           data: updateExtensionSettings),
       null);
 }
@@ -174,22 +198,22 @@ Future<void> switchExtension(
     String identity, SwitchExtension switchExtension) async {
   return _parse(
       () => _client.dio
-          .put("/api/v1/extensions/$identity/switch", data: switchExtension),
+          .put("api/v1/extensions/$identity/switch", data: switchExtension),
       null);
 }
 
 Future<void> deleteExtension(String identity) async {
-  return _parse(() => _client.dio.delete("/api/v1/extensions/$identity"), null);
+  return _parse(() => _client.dio.delete("api/v1/extensions/$identity"), null);
 }
 
 Future<UpdateCheckExtensionResp> upgradeCheckExtension(String identity) async {
-  return _parse(() => _client.dio.get("/api/v1/extensions/$identity/update"),
+  return _parse(() => _client.dio.get("api/v1/extensions/$identity/update"),
       (data) => UpdateCheckExtensionResp.fromJson(data));
 }
 
 Future<void> updateExtension(String identity) async {
   return _parse(
-      () => _client.dio.post("/api/v1/extensions/$identity/update"), null);
+      () => _client.dio.post("api/v1/extensions/$identity/update"), null);
 }
 
 Future<Response<String>> proxyRequest<T>(String uri,
