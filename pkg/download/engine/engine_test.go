@@ -6,12 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/GopeedLab/gopeed/internal/test"
-	gojaerror "github.com/GopeedLab/gopeed/pkg/download/engine/inject/error"
-	"github.com/GopeedLab/gopeed/pkg/download/engine/inject/file"
-	gojautil "github.com/GopeedLab/gopeed/pkg/download/engine/util"
-	"github.com/GopeedLab/gopeed/pkg/util"
-	"github.com/dop251/goja"
 	"io"
 	"net"
 	"net/http"
@@ -19,6 +13,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/GopeedLab/gopeed/internal/test"
+	"github.com/GopeedLab/gopeed/pkg/base"
+	gojaerror "github.com/GopeedLab/gopeed/pkg/download/engine/inject/error"
+	"github.com/GopeedLab/gopeed/pkg/download/engine/inject/file"
+	gojautil "github.com/GopeedLab/gopeed/pkg/download/engine/util"
+	"github.com/dop251/goja"
 )
 
 func TestPolyfill(t *testing.T) {
@@ -26,6 +27,8 @@ func TestPolyfill(t *testing.T) {
 	doTestPolyfill(t, "XMLHttpRequest")
 	doTestPolyfill(t, "Blob")
 	doTestPolyfill(t, "FormData")
+	doTestPolyfill(t, "TextDecoder")
+	doTestPolyfill(t, "TextEncoder")
 	doTestPolyfill(t, "fetch")
 	doTestPolyfill(t, "__gopeed_create_vm")
 }
@@ -69,6 +72,44 @@ async function testOctetStream(file){
 	return await resp.text();
 }
 
+async function testRedirect() {
+    const url = host + '/redirect?num=3'
+    return await new Promise((resolve, reject) => {
+        fetch(url, {
+            method: 'HEAD',
+            redirect: 'error',
+        }).then(()=>reject())
+
+        fetch(url, {
+            method: 'HEAD',
+            redirect: 'follow',
+        }).then((res) =>res.headers.has('location') && reject()).catch(() => reject())
+
+        fetch(url, {
+            method: 'HEAD',
+            redirect: 'manual',
+        }).then((res) => {
+			const location = res.headers.get('location');
+			location ? resolve(location) : reject()
+        }).catch(() => reject())
+    })
+}
+
+async function testResponseUrl() {
+    return new Promise((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('GET', host+'/redirect?num=3');
+		xhr.onload = function(){
+            if (xhr.responseURL.includes('/redirect?num=0')){
+                resolve();
+            }else{
+                reject();
+            }
+		};
+		xhr.send();
+	});
+}
+
 async function testFormData(file){
 	const formData = new FormData();
 	formData.append('name', 'test');
@@ -78,6 +119,30 @@ async function testFormData(file){
 		body: formData
 	});
 	return await resp.json();
+}
+
+function testHeader(){
+	return new Promise((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('GET', host+'/header');
+		xhr.setRequestHeader('X-Gopeed-Test', 'test1');
+		xhr.setRequestHeader('x-gopeed-test', 'test2');
+		xhr.setRequestHeader('x-Gopeed-test', 'test3');
+		xhr.onload = function(){
+			const testHeader1 = xhr.getResponseHeader("X-Gopeed-Test");
+		    const testHeader2 = xhr.getResponseHeader("x-gopeed-test");
+		    const testHeader3 = xhr.getResponseHeader("x-Gopeed-test");
+			const expect = 'test1, test2, test3';
+			const all = xhr.getAllResponseHeaders();
+			if(testHeader1 === expect && testHeader2 === expect && testHeader3 === expect 
+				&& all.includes('X-Gopeed-Test: '+expect)){
+				resolve();
+			}else{
+				reject();
+			}
+		};
+		xhr.send();
+	});
 }
 
 function testProgress(){
@@ -140,6 +205,31 @@ function testTimeout(){
 		xhr.send();
 	});
 }
+
+async function testFingerprint(fingerprint,ua){
+	__gopeed_setFingerprint(fingerprint);
+	const resp = await fetch(host+'/ua');
+	const data = await resp.json();
+	if(!data.user_agent.includes(ua)){
+		throw new Error('fingerprint test failed, user agent: ' + data.user_agent);
+	}
+}
+
+async function testFingerprintDefault(){
+	await testFingerprint('none', 'Go')
+}
+
+async function testFingerprintChrome(){
+	await testFingerprint('chrome', 'Chrome')
+}
+
+async function testFingerprintFirefox(){
+	await testFingerprint('firefox', 'Firefox')
+}
+
+async function testFingerprintSafari(){
+	await testFingerprint('safari', 'Safari')
+}
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -172,6 +262,20 @@ function testTimeout(){
 		}
 	}()
 
+	t.Run("testRedirect", func(t *testing.T) {
+		_, err := callTestFun(engine, "testRedirect")
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("testResponseUrl", func(t *testing.T) {
+		_, err = callTestFun(engine, "testResponseUrl")
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	func() {
 		jsFile, goFile, md5 := buildFile(t, engine.Runtime)
 		result, err = callTestFun(engine, "testFormData", jsFile)
@@ -190,19 +294,37 @@ function testTimeout(){
 		}
 	}()
 
+	_, err = callTestFun(engine, "testHeader")
+	if err != nil {
+		t.Fatal("header test failed", err)
+	}
+
 	_, err = callTestFun(engine, "testProgress")
 	if err != nil {
-		t.Fatal("progress test failed")
+		t.Fatal("progress test failed", err)
 	}
 
 	_, err = callTestFun(engine, "testAbort")
 	if err != nil {
-		t.Fatal("abort test failed")
+		t.Fatal("abort test failed", err)
 	}
 
 	_, err = callTestFun(engine, "testTimeout")
 	if err == nil || err.Error() != "timeout" {
 		t.Fatalf("timeout test failed, want %s, got %s", "timeout", err)
+	}
+
+	_, err = callTestFun(engine, "testFingerprintChrome")
+	if err != nil {
+		t.Fatal("testFingerprintChrome test failed", err)
+	}
+	_, err = callTestFun(engine, "testFingerprintFirefox")
+	if err != nil {
+		t.Fatal("testFingerprintFirefox test failed", err)
+	}
+	_, err = callTestFun(engine, "testFingerprintSafari")
+	if err != nil {
+		t.Fatal("testFingerprintSafari test failed", err)
 	}
 }
 
@@ -217,8 +339,16 @@ func doTestFetchWithProxy(t *testing.T, usr, pwd string) {
 
 	proxyListener := test.StartSocks5Server(usr, pwd)
 	defer proxyListener.Close()
-
-	engine := NewEngine(&Config{ProxyURL: util.BuildProxyUrl("socks5", proxyListener.Addr().String(), usr, pwd)})
+	engine := NewEngine(&Config{
+		ProxyConfig: &base.DownloaderProxyConfig{
+			Enable: true,
+			System: false,
+			Scheme: "socks5",
+			Host:   proxyListener.Addr().String(),
+			Usr:    usr,
+			Pwd:    pwd,
+		},
+	})
 
 	if _, err := engine.RunString(fmt.Sprintf("var host = 'http://%s';", httpListener.Addr().String())); err != nil {
 		t.Fatal(err)
@@ -320,6 +450,15 @@ func startServer() net.Listener {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/header", func(w http.ResponseWriter, r *http.Request) {
+		for k, v := range r.Header {
+			if strings.HasPrefix(k, "X-Gopeed") {
+				w.Header().Set(k, strings.Join(v, ", "))
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
 	mux.HandleFunc("/text", func(w http.ResponseWriter, r *http.Request) {
 		buf, _ := io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
@@ -358,6 +497,25 @@ func startServer() net.Listener {
 		time.Sleep(time.Duration(t) * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
+		num := r.URL.Query().Get("num")
+		n, _ := strconv.Atoi(num)
+		if n > 0 {
+			http.Redirect(w, r, fmt.Sprintf("/redirect?num=%d", n-1), http.StatusFound)
+		} else {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ok"))
+		}
+	})
+	mux.HandleFunc("/ua", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		data := map[string]any{
+			"user_agent": r.UserAgent(),
+		}
+		buf, _ := json.Marshal(data)
+		w.WriteHeader(http.StatusOK)
+		w.Write(buf)
 	})
 	server.Handler = mux
 	go server.Serve(listener)

@@ -8,7 +8,19 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 )
+
+func Info(w http.ResponseWriter, r *http.Request) {
+	info := map[string]any{
+		"version":  base.Version,
+		"runtime":  runtime.Version(),
+		"os":       runtime.GOOS,
+		"arch":     runtime.GOARCH,
+		"inDocker": base.InDocker == "true",
+	}
+	WriteJson(w, model.NewOkResult(info))
+}
 
 func Resolve(w http.ResponseWriter, r *http.Request) {
 	var req base.Request
@@ -45,14 +57,44 @@ func CreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func CreateTaskBatch(w http.ResponseWriter, r *http.Request) {
+	var req base.CreateTaskBatch
+	if ReadJson(r, w, &req) {
+		if len(req.Reqs) == 0 {
+			WriteJson(w, model.NewErrorResult("param invalid: reqs", model.CodeInvalidParam))
+			return
+		}
+		taskIds, err := Downloader.CreateDirectBatch(&req)
+		if err != nil {
+			WriteJson(w, model.NewErrorResult(err.Error()))
+			return
+		}
+		WriteJson(w, model.NewOkResult(taskIds))
+	}
+}
+
 func PauseTask(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	taskId := vars["id"]
-	if taskId == "" {
-		WriteJson(w, model.NewErrorResult("param invalid: id", model.CodeInvalidParam))
+	filter, errResult := parseIdFilter(r)
+	if errResult != nil {
+		WriteJson(w, errResult)
 		return
 	}
-	if err := Downloader.Pause(taskId); err != nil {
+
+	if err := Downloader.Pause(filter); err != nil {
+		WriteJson(w, model.NewErrorResult(err.Error()))
+		return
+	}
+	WriteJson(w, model.NewNilResult())
+}
+
+func PauseTasks(w http.ResponseWriter, r *http.Request) {
+	filter, errResult := parseFilter(r)
+	if errResult != nil {
+		WriteJson(w, errResult)
+		return
+	}
+
+	if err := Downloader.Pause(filter); err != nil {
 		WriteJson(w, model.NewErrorResult(err.Error()))
 		return
 	}
@@ -60,29 +102,27 @@ func PauseTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func ContinueTask(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	taskId := vars["id"]
-	if taskId == "" {
-		WriteJson(w, model.NewErrorResult("param invalid: id", model.CodeInvalidParam))
+	filter, errResult := parseIdFilter(r)
+	if errResult != nil {
+		WriteJson(w, errResult)
 		return
 	}
-	if err := Downloader.Continue(taskId); err != nil {
+
+	if err := Downloader.Continue(filter); err != nil {
 		WriteJson(w, model.NewErrorResult(err.Error()))
 		return
 	}
 	WriteJson(w, model.NewNilResult())
 }
 
-func PauseAllTask(w http.ResponseWriter, r *http.Request) {
-	if err := Downloader.PauseAll(); err != nil {
-		WriteJson(w, model.NewErrorResult(err.Error()))
+func ContinueTasks(w http.ResponseWriter, r *http.Request) {
+	filter, errResult := parseFilter(r)
+	if errResult != nil {
+		WriteJson(w, errResult)
 		return
 	}
-	WriteJson(w, model.NewNilResult())
-}
 
-func ContinueAllTask(w http.ResponseWriter, r *http.Request) {
-	if err := Downloader.ContinueAll(); err != nil {
+	if err := Downloader.Continue(filter); err != nil {
 		WriteJson(w, model.NewErrorResult(err.Error()))
 		return
 	}
@@ -90,14 +130,14 @@ func ContinueAllTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteTask(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	taskId := vars["id"]
-	force := r.FormValue("force")
-	if taskId == "" {
-		WriteJson(w, model.NewErrorResult("param invalid: id", model.CodeInvalidParam))
+	filter, errResult := parseIdFilter(r)
+	if errResult != nil {
+		WriteJson(w, errResult)
 		return
 	}
-	if err := Downloader.Delete(taskId, force == "true"); err != nil {
+	force := r.FormValue("force")
+
+	if err := Downloader.Delete(filter, force == "true"); err != nil {
 		WriteJson(w, model.NewErrorResult(err.Error()))
 		return
 	}
@@ -105,10 +145,14 @@ func DeleteTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteTasks(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	status := r.Form["status"]
+	filter, errResult := parseFilter(r)
+	if errResult != nil {
+		WriteJson(w, errResult)
+		return
+	}
 	force := r.FormValue("force")
-	if err := Downloader.DeleteByStatues(convertStatues(status), force == "true"); err != nil {
+
+	if err := Downloader.Delete(filter, force == "true"); err != nil {
 		WriteJson(w, model.NewErrorResult(err.Error()))
 		return
 	}
@@ -131,9 +175,13 @@ func GetTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetTasks(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	status := r.Form["status"]
-	tasks := Downloader.GetTasksByStatues(convertStatues(status))
+	filter, errResult := parseFilter(r)
+	if errResult != nil {
+		WriteJson(w, errResult)
+		return
+	}
+
+	tasks := Downloader.GetTasksByFilter(filter)
 	WriteJson(w, model.NewOkResult(tasks))
 }
 
@@ -142,7 +190,7 @@ func GetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func PutConfig(w http.ResponseWriter, r *http.Request) {
-	var cfg download.DownloaderStoreConfig
+	var cfg base.DownloaderStoreConfig
 	if ReadJson(r, w, &cfg) {
 		if err := Downloader.PutConfig(&cfg); err != nil {
 			WriteJson(w, model.NewErrorResult(err.Error()))
@@ -261,6 +309,8 @@ func DoProxy(w http.ResponseWriter, r *http.Request) {
 	r.RequestURI = ""
 	r.URL = targetUrl
 	r.Host = targetUrl.Host
+	r.Header.Del("Authorization")
+	r.Header.Del("X-Target-Uri")
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
 		writeError(w, err.Error())
@@ -296,6 +346,32 @@ func GetStats(w http.ResponseWriter, r *http.Request) {
 	WriteJson(w, model.NewOkResult(statsResult))
 }
 
+func parseIdFilter(r *http.Request) (*download.TaskFilter, any) {
+	vars := mux.Vars(r)
+	taskId := vars["id"]
+	if taskId == "" {
+		return nil, model.NewErrorResult("param invalid: id", model.CodeInvalidParam)
+	}
+
+	filter := &download.TaskFilter{
+		IDs: []string{taskId},
+	}
+	return filter, nil
+}
+
+func parseFilter(r *http.Request) (*download.TaskFilter, any) {
+	if err := r.ParseForm(); err != nil {
+		return nil, model.NewErrorResult(err.Error())
+	}
+
+	filter := &download.TaskFilter{
+		IDs:         r.Form["id"],
+		Statuses:    convertStatues(r.Form["status"]),
+		NotStatuses: convertStatues(r.Form["notStatus"]),
+	}
+	return filter, nil
+}
+
 func convertStatues(statues []string) []base.Status {
 	result := make([]base.Status, 0)
 	for _, status := range statues {
@@ -309,7 +385,7 @@ func writeError(w http.ResponseWriter, msg string) {
 	w.Write([]byte(msg))
 }
 
-func getServerConfig() *download.DownloaderStoreConfig {
+func getServerConfig() *base.DownloaderStoreConfig {
 	cfg, _ := Downloader.GetConfig()
 	return cfg
 }

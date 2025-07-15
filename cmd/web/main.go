@@ -23,19 +23,24 @@ func main() {
 	}
 
 	args := parse()
-	var webBasicAuth *model.WebBasicAuth
+	var webAuth *model.WebAuth
 	if isNotBlank(args.Username) && isNotBlank(args.Password) {
-		webBasicAuth = &model.WebBasicAuth{
+		webAuth = &model.WebAuth{
 			Username: *args.Username,
 			Password: *args.Password,
 		}
 	}
 
-	exe, err := os.Executable()
-	if err != nil {
-		panic(err)
+	var dir string
+	if args.StorageDir != nil && *args.StorageDir != "" {
+		dir = *args.StorageDir
+	} else {
+		exe, err := os.Executable()
+		if err != nil {
+			panic(err)
+		}
+		dir = filepath.Dir(exe)
 	}
-	dir := filepath.Dir(exe)
 
 	cfg := &model.StartConfig{
 		Network:        "tcp",
@@ -43,10 +48,11 @@ func main() {
 		Storage:        model.StorageBolt,
 		StorageDir:     filepath.Join(dir, "storage"),
 		ApiToken:       *args.ApiToken,
+		DownloadConfig: args.DownloadConfig,
 		ProductionMode: true,
 		WebEnable:      true,
 		WebFS:          sub,
-		WebBasicAuth:   webBasicAuth,
+		WebAuth:        webAuth,
 	}
 	cmd.Start(cfg)
 }

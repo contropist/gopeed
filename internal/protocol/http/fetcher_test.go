@@ -8,8 +8,10 @@ import (
 	"github.com/GopeedLab/gopeed/internal/test"
 	"github.com/GopeedLab/gopeed/pkg/base"
 	"github.com/GopeedLab/gopeed/pkg/protocol/http"
-	"github.com/GopeedLab/gopeed/pkg/util"
 	"net"
+	gohttp "net/http"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,6 +37,36 @@ func TestFetcher_Resolve(t *testing.T) {
 			},
 		},
 	}, t)
+	testResolve(test.StartTestCustomServer, "encoded-word", &base.Resource{
+		Size:  test.BuildSize,
+		Range: false,
+		Files: []*base.FileInfo{
+			{
+				Name: "测试.zip",
+				Size: test.BuildSize,
+			},
+		},
+	}, t)
+	testResolve(test.StartTestCustomServer, "no-encode", &base.Resource{
+		Size:  test.BuildSize,
+		Range: false,
+		Files: []*base.FileInfo{
+			{
+				Name: "测试.zip",
+				Size: test.BuildSize,
+			},
+		},
+	}, t)
+	testResolve(test.StartTestCustomServer, "%E6%B5%8B%E8%AF%95.zip", &base.Resource{
+		Size:  0,
+		Range: false,
+		Files: []*base.FileInfo{
+			{
+				Name: "测试.zip",
+				Size: 0,
+			},
+		},
+	}, t)
 	testResolve(test.StartTestCustomServer, test.BuildName, &base.Resource{
 		Size:  0,
 		Range: false,
@@ -55,6 +87,36 @@ func TestFetcher_Resolve(t *testing.T) {
 	}
 	if fetcher.Meta().Res.Files[0].Name != "github.com" {
 		t.Errorf("Resolve() got = %v, want %v", fetcher.Meta().Res, "github.com")
+	}
+}
+
+func TestFetcher_ResolveWithHostHeader(t *testing.T) {
+	fetcher := buildFetcher()
+	err := fetcher.Resolve(&base.Request{
+		URL: "https://bing.com",
+		Extra: &http.ReqExtra{
+			Header: map[string]string{
+				"Host": "test",
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "400") {
+		t.Errorf("Resolve() got = %v, want %v", err, "400")
+	}
+}
+
+func TestFetcher_ResolveWithInvalidHeader(t *testing.T) {
+	fetcher := buildFetcher()
+	err := fetcher.Resolve(&base.Request{
+		URL: "https://bing.com",
+		Extra: &http.ReqExtra{
+			Header: map[string]string{
+				"Referer": "\rtest",
+			},
+		},
+	})
+	if err != nil {
+		t.Errorf("Resolve() got = %v, want nil", err)
 	}
 }
 
@@ -131,6 +193,22 @@ func TestFetcher_DownloadLimit(t *testing.T) {
 	downloadNormal(listener, 8, t)
 }
 
+func TestFetcher_DownloadResponseBodyReadTimeout(t *testing.T) {
+	listener := test.StartTestLimitServer(16, readTimeout.Milliseconds()+5000)
+	defer listener.Close()
+
+	downloadError(listener, 1, t)
+	downloadError(listener, 4, t)
+}
+
+func TestFetcher_DownloadOnBugFileServer(t *testing.T) {
+	listener := test.StartTestRangeBugServer()
+	defer listener.Close()
+
+	downloadNormal(listener, 1, t)
+	downloadNormal(listener, 4, t)
+}
+
 func TestFetcher_DownloadResume(t *testing.T) {
 	listener := test.StartTestFileServer()
 	defer listener.Close()
@@ -190,6 +268,81 @@ func TestFetcher_ConfigUseServerCtime(t *testing.T) {
 	got := test.FileMd5(test.DownloadFile)
 	if want != got {
 		t.Errorf("Download() got = %v, want %v", got, want)
+	}
+}
+
+func TestFetcher_Stats(t *testing.T) {
+	listener := test.StartTestFileServer()
+	defer listener.Close()
+	fetcher := doDownloadReady(buildConfigFetcher(config{
+		Connections: 16,
+	}), listener, 0, t)
+	err := fetcher.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fetcher.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats := fetcher.Stats().(*http.Stats)
+	if len(stats.Connections) != 16 {
+		t.Errorf("Stats() got = %v, want %v", len(stats.Connections), 16)
+	}
+	totalDownloaded := int64(0)
+	for _, conn := range stats.Connections {
+		totalDownloaded += conn.Downloaded
+	}
+	if totalDownloaded != test.BuildSize {
+		t.Errorf("Stats() got = %v, want %v", totalDownloaded, test.BuildSize)
+	}
+}
+
+func TestFetcherManager_ParseName(t *testing.T) {
+	type args struct {
+		u string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "broken url",
+			args: args{
+				u: "https://!@#%github.com",
+			},
+			want: "",
+		},
+		{
+			name: "file path",
+			args: args{
+				u: "https://github.com/index.html",
+			},
+			want: "index.html",
+		},
+		{
+			name: "file path with query and hash",
+			args: args{
+				u: "https://github.com/a/b/index.html/#list?name=1",
+			},
+			want: "index.html",
+		},
+		{
+			name: "no file path",
+			args: args{
+				u: "https://github.com",
+			},
+			want: "github.com",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm := &FetcherManager{}
+			if got := fm.ParseName(tt.args.u); got != tt.want {
+				t.Errorf("ParseName() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -307,7 +460,7 @@ func downloadResume(listener net.Listener, connections int, t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fb := new(FetcherBuilder)
+	fb := new(FetcherManager)
 	time.Sleep(time.Millisecond * 50)
 	data, err := fb.Store(fetcher)
 	if err != nil {
@@ -338,7 +491,13 @@ func downloadResume(listener net.Listener, connections int, t *testing.T) {
 func downloadWithProxy(httpListener net.Listener, proxyListener net.Listener, t *testing.T) {
 	fetcher := downloadReady(httpListener, 4, t)
 	ctl := controller.NewController()
-	ctl.ProxyUrl = util.BuildProxyUrl("socks5", proxyListener.Addr().String(), "", "")
+	ctl.GetProxy = func(requestProxy *base.RequestProxy) func(*gohttp.Request) (*url.URL, error) {
+		return (&base.DownloaderProxyConfig{
+			Enable: true,
+			Scheme: "socks5",
+			Host:   proxyListener.Addr().String(),
+		}).ToHandler()
+	}
 	fetcher.Setup(ctl)
 	err := fetcher.Start()
 	if err != nil {
@@ -356,19 +515,21 @@ func downloadWithProxy(httpListener net.Listener, proxyListener net.Listener, t 
 }
 
 func buildFetcher() *Fetcher {
-	fetcher := new(FetcherBuilder).Build()
-	fetcher.Setup(controller.NewController())
+	fm := new(FetcherManager)
+	fetcher := fm.Build()
+	newController := controller.NewController()
+	newController.GetConfig = func(v any) {
+		json.Unmarshal([]byte(test.ToJson(fm.DefaultConfig())), v)
+	}
+	fetcher.Setup(newController)
 	return fetcher.(*Fetcher)
 }
 
 func buildConfigFetcher(cfg config) fetcher.Fetcher {
-	fetcher := new(FetcherBuilder).Build()
+	fetcher := new(FetcherManager).Build()
 	newController := controller.NewController()
-	newController.GetConfig = func(v any) bool {
-		if err := json.Unmarshal([]byte(test.ToJson(cfg)), v); err != nil {
-			return false
-		}
-		return true
+	newController.GetConfig = func(v any) {
+		json.Unmarshal([]byte(test.ToJson(cfg)), v)
 	}
 	fetcher.Setup(newController)
 	return fetcher
