@@ -6,10 +6,10 @@ import 'package:hive/hive.dart';
 import 'entity.dart';
 
 const String _startConfig = 'startConfig';
-const String _lastRunningConfig = 'lastRunningConfig';
 const String _windowState = 'windowState';
 const String _bookmark = 'bookmark';
 const String _createHistory = 'createHistory';
+const String _webToken = 'webToken';
 
 class Database {
   static final Database _instance = Database._internal();
@@ -54,15 +54,6 @@ class Database {
         _startConfig, (json) => StartConfigEntity.fromJson(json));
   }
 
-  void saveLastRunningConfig(StartConfigEntity entity) {
-    save<StartConfigEntity>(_lastRunningConfig, entity);
-  }
-
-  StartConfigEntity? getLastRunningConfig() {
-    return get<StartConfigEntity>(
-        _lastRunningConfig, (json) => StartConfigEntity.fromJson(json));
-  }
-
   /// Patch non-null fields with the original value
   void saveWindowState(WindowStateEntity entity) {
     final state = getWindowState();
@@ -89,6 +80,14 @@ class Database {
       return (json as Map<String, dynamic>)
           .map((key, value) => MapEntry(key, value.toString()));
     });
+  }
+
+  void saveWebToken(String token) {
+    save<String>(_webToken, token);
+  }
+
+  String? getWebToken() {
+    return get<String>(_webToken, (json) => json.toString());
   }
 
   void saveCreateHistory(String url) {

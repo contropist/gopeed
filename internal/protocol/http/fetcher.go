@@ -3,16 +3,12 @@ package http
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/GopeedLab/gopeed/internal/controller"
-	"github.com/GopeedLab/gopeed/internal/fetcher"
-	"github.com/GopeedLab/gopeed/pkg/base"
-	fhttp "github.com/GopeedLab/gopeed/pkg/protocol/http"
-	"github.com/xiaoqidun/setft"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -20,7 +16,21 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/GopeedLab/gopeed/internal/controller"
+	"github.com/GopeedLab/gopeed/internal/fetcher"
+	"github.com/GopeedLab/gopeed/pkg/base"
+	fhttp "github.com/GopeedLab/gopeed/pkg/protocol/http"
+	"github.com/xiaoqidun/setft"
+	"golang.org/x/sync/errgroup"
+)
+
+const (
+	connectTimeout = 15 * time.Second
+	readTimeout    = 15 * time.Second
+	helpMinSize    = 1 * 1024 * 1024
 )
 
 type RequestError struct {
@@ -40,8 +50,20 @@ type chunk struct {
 	Begin      int64
 	End        int64
 	Downloaded int64
+}
 
+type connection struct {
+	Chunk      *chunk
+	Downloaded int64
+	Completed  bool
+
+	failed     bool
 	retryTimes int
+}
+
+// get remain to download bytes
+func (c *chunk) remain() int64 {
+	return c.End - c.Begin + 1 - c.Downloaded
 }
 
 func newChunk(begin int64, end int64) *chunk {
@@ -56,16 +78,15 @@ type Fetcher struct {
 	config *config
 	doneCh chan error
 
-	meta   *fetcher.FetcherMeta
-	chunks []*chunk
+	meta         *fetcher.FetcherMeta
+	connections  []*connection
+	helpLock     sync.Mutex
+	redirectURL  string
+	redirectLock sync.Mutex
 
 	file   *os.File
 	cancel context.CancelFunc
 	eg     *errgroup.Group
-}
-
-func (f *Fetcher) Name() string {
-	return "http"
 }
 
 func (f *Fetcher) Setup(ctl *controller.Controller) {
@@ -74,13 +95,7 @@ func (f *Fetcher) Setup(ctl *controller.Controller) {
 	if f.meta == nil {
 		f.meta = &fetcher.FetcherMeta{}
 	}
-	exist := f.ctl.GetConfig(&f.config)
-	if !exist {
-		f.config = &config{
-			UserAgent:   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
-			Connections: 1,
-		}
-	}
+	f.ctl.GetConfig(&f.config)
 	return
 }
 
@@ -88,6 +103,7 @@ func (f *Fetcher) Resolve(req *base.Request) error {
 	if err := base.ParseReqExtra[fhttp.ReqExtra](req); err != nil {
 		return err
 	}
+	f.meta.Req = req
 	httpReq, err := f.buildRequest(nil, req)
 	if err != nil {
 		return err
@@ -108,11 +124,11 @@ func (f *Fetcher) Resolve(req *base.Request) error {
 	}
 
 	if base.HttpCodePartialContent == httpResp.StatusCode || (base.HttpCodeOK == httpResp.StatusCode && httpResp.Header.Get(base.HttpHeaderAcceptRanges) == base.HttpHeaderBytes && strings.HasPrefix(httpResp.Header.Get(base.HttpHeaderContentRange), base.HttpHeaderBytes)) {
-		// 1.返回206响应码表示支持断点下载 2.不返回206但是Accept-Ranges首部并且等于bytes也表示支持断点下载
+		// response 206 status code, support breakpoint continuation
 		res.Range = true
-		// 解析资源大小: bytes 0-1000/1001 => 1001
+		// parse content length from Content-Range header, eg: bytes 0-1000/1001 or bytes 0-0/*
 		contentTotal := path.Base(httpResp.Header.Get(base.HttpHeaderContentRange))
-		if contentTotal != "" {
+		if contentTotal != "" && contentTotal != "*" {
 			parse, err := strconv.ParseInt(contentTotal, 10, 64)
 			if err != nil {
 				return err
@@ -120,7 +136,8 @@ func (f *Fetcher) Resolve(req *base.Request) error {
 			res.Size = parse
 		}
 	} else if base.HttpCodeOK == httpResp.StatusCode {
-		// 返回200响应码，不支持断点下载，通过Content-Length头获取文件大小，获取不到的话可能是chunked编码
+		// response 200 status code, not support breakpoint continuation, get file size by Content-Length header
+		// if not found, maybe chunked encoding
 		contentLength := httpResp.Header.Get(base.HttpHeaderContentLength)
 		if contentLength != "" {
 			parse, err := strconv.ParseInt(contentLength, 10, 64)
@@ -149,19 +166,35 @@ func (f *Fetcher) Resolve(req *base.Request) error {
 		_, params, _ := mime.ParseMediaType(contentDisposition)
 		filename := params["filename"]
 		if filename != "" {
-			file.Name = filename
+			// Check if the filename is MIME encoded-word
+			if strings.HasPrefix(filename, "=?") {
+				decoder := new(mime.WordDecoder)
+				filename = strings.Replace(filename, "UTF8", "UTF-8", 1)
+				file.Name, _ = decoder.Decode(filename)
+			} else {
+				file.Name = filename
+			}
+		} else {
+			substr := "attachment; filename="
+			index := strings.Index(contentDisposition, substr)
+			if index != -1 {
+				file.Name = contentDisposition[index+len(substr):]
+			}
 		}
 	}
-	// Get file filePath by URL
+	// get file filePath by URL
 	if file.Name == "" {
 		file.Name = path.Base(httpReq.URL.Path)
+		// Url decode
+		if file.Name != "" {
+			file.Name, _ = url.QueryUnescape(file.Name)
+		}
 	}
 	// unknown file filePath
 	if file.Name == "" || file.Name == "/" || file.Name == "." {
 		file.Name = httpReq.URL.Hostname()
 	}
 	res.Files = append(res.Files, file)
-	f.meta.Req = req
 	f.meta.Res = res
 	return nil
 }
@@ -169,9 +202,6 @@ func (f *Fetcher) Resolve(req *base.Request) error {
 func (f *Fetcher) Create(opts *base.Options) error {
 	f.meta.Opts = opts
 
-	if err := base.ParseReqExtra[fhttp.ReqExtra](f.meta.Req); err != nil {
-		return err
-	}
 	if err := base.ParseOptsExtra[fhttp.OptsExtra](f.meta.Opts); err != nil {
 		return err
 	}
@@ -179,8 +209,12 @@ func (f *Fetcher) Create(opts *base.Options) error {
 		opts.Extra = &fhttp.OptsExtra{}
 	}
 	extra := opts.Extra.(*fhttp.OptsExtra)
-	if extra.Connections == 0 {
+	if extra.Connections <= 0 {
 		extra.Connections = f.config.Connections
+		// Avoid zero connections configuration
+		if extra.Connections <= 0 {
+			extra.Connections = 1
+		}
 	}
 	return nil
 }
@@ -201,9 +235,16 @@ func (f *Fetcher) Start() (err error) {
 	if err != nil {
 		return err
 	}
-	if f.chunks == nil {
-		f.chunks = f.splitChunk()
+
+	// Avoid request extra modified by extension
+	if err = base.ParseReqExtra[fhttp.ReqExtra](f.meta.Req); err != nil {
+		return err
 	}
+
+	if f.connections == nil {
+		f.connections = f.splitConnection()
+	}
+	f.redirectURL = ""
 	f.fetch()
 	return
 }
@@ -230,16 +271,26 @@ func (f *Fetcher) Meta() *fetcher.FetcherMeta {
 }
 
 func (f *Fetcher) Stats() any {
-	// todo http download health
-	return &fhttp.Stats{}
+	statsConnections := make([]*fhttp.StatsConnection, 0)
+	for _, connection := range f.connections {
+		statsConnections = append(statsConnections, &fhttp.StatsConnection{
+			Downloaded: connection.Downloaded,
+			Completed:  connection.Completed,
+			Failed:     connection.failed,
+			RetryTimes: connection.retryTimes,
+		})
+	}
+	return &fhttp.Stats{
+		Connections: statsConnections,
+	}
 }
 
 func (f *Fetcher) Progress() fetcher.Progress {
 	p := make(fetcher.Progress, 0)
-	if len(f.chunks) > 0 {
+	if len(f.connections) > 0 {
 		total := int64(0)
-		for _, chunk := range f.chunks {
-			total += chunk.Downloaded
+		for _, connection := range f.connections {
+			total += connection.Downloaded
 		}
 		p = append(p, total)
 	}
@@ -254,19 +305,34 @@ func (f *Fetcher) fetch() {
 	var ctx context.Context
 	ctx, f.cancel = context.WithCancel(context.Background())
 	f.eg, _ = errgroup.WithContext(ctx)
-	for i := 0; i < len(f.chunks); i++ {
+	connectionErrs := make([]error, len(f.connections))
+	for i := 0; i < len(f.connections); i++ {
 		i := i
 		f.eg.Go(func() error {
-			return f.fetchChunk(i, ctx)
+			err := f.run(i, ctx)
+			// if canceled, fail fast
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+			connectionErrs[i] = err
+			return nil
 		})
 	}
 
 	go func() {
 		err := f.eg.Wait()
-		// check if canceled
-		if errors.Is(err, context.Canceled) {
+		// error returned only if canceled, just return
+		if err != nil {
 			return
 		}
+		// check all fetch results, if any error, return
+		for _, chunkErr := range connectionErrs {
+			if chunkErr != nil {
+				err = chunkErr
+				break
+			}
+		}
+
 		f.file.Close()
 		// Update file last modified time
 		if f.config.UseServerCtime && f.meta.Res.Files[0].Ctime != nil {
@@ -276,116 +342,193 @@ func (f *Fetcher) fetch() {
 	}()
 }
 
-func (f *Fetcher) fetchChunk(index int, ctx context.Context) (err error) {
-	chunk := f.chunks[index]
-	chunk.retryTimes = 0
-
-	httpReq, err := f.buildRequest(ctx, f.meta.Req)
-	if err != nil {
-		return err
-	}
+func (f *Fetcher) run(index int, ctx context.Context) (err error) {
+	connection := f.connections[index]
+	connection.failed = false
+	connection.retryTimes = 0
 	var (
-		client     = f.buildClient()
-		buf        = make([]byte, 8192)
-		maxRetries = 3
+		client = f.buildClient()
+		buf    = make([]byte, 8192)
 	)
-	// retry until all remain chunks failed
+
+	downloadChunk := func(chunk *chunk) (err error) {
+		// retry until all remain chunks failed
+		for {
+			// if chunk is completed, return
+			if f.meta.Res.Range && chunk.remain() <= 0 {
+				return nil
+			}
+			// if all chunks failed, return
+			if connection.failed {
+				allFailed := true
+				for _, c := range f.connections {
+					if c.Completed {
+						continue
+					}
+					if !c.failed {
+						allFailed = false
+						break
+					}
+				}
+				if allFailed {
+					if connection.retryTimes >= 3 {
+						return
+					} else {
+						connection.retryTimes++
+					}
+				}
+			}
+
+			err = func() error {
+				var (
+					httpReq *http.Request
+					resp    *http.Response
+				)
+				f.redirectLock.Lock()
+				if f.redirectURL != "" {
+					f.redirectLock.Unlock()
+				}
+				err = func() (err error) {
+					defer func() {
+						if f.redirectURL == "" {
+							if err == nil {
+								f.redirectURL = resp.Request.URL.String()
+							}
+							f.redirectLock.Unlock()
+						}
+					}()
+
+					httpReq, err = f.buildRequest(ctx, f.meta.Req)
+					if err != nil {
+						return
+					}
+					if f.meta.Res.Range {
+						httpReq.Header.Set(base.HttpHeaderRange,
+							fmt.Sprintf(base.HttpHeaderRangeFormat, chunk.Begin+chunk.Downloaded, chunk.End))
+					} else {
+						chunk.Downloaded = 0
+					}
+					resp, err = client.Do(httpReq)
+					if err != nil {
+						return
+					}
+					return
+				}()
+				if err != nil {
+					return err
+				}
+
+				defer resp.Body.Close()
+				if resp.StatusCode != base.HttpCodeOK && resp.StatusCode != base.HttpCodePartialContent {
+					err = NewRequestError(resp.StatusCode, resp.Status)
+					return err
+				}
+				connection.failed = false
+				reader := NewTimeoutReader(resp.Body, readTimeout)
+				for {
+					n, err := reader.Read(buf)
+					if n > 0 {
+						finished := false
+						if f.meta.Res.Range {
+							remain := chunk.remain()
+							// If downloaded bytes exceed the remain bytes, only write remain bytes
+							if remain < int64(n) {
+								n = int(remain)
+								finished = true
+							}
+						}
+
+						_, err := f.file.WriteAt(buf[:n], chunk.Begin+chunk.Downloaded)
+						if err != nil {
+							return err
+						}
+						chunk.Downloaded += int64(n)
+						connection.Downloaded += int64(n)
+
+						if finished {
+							return nil
+						}
+					}
+					if err != nil {
+						if err == io.EOF {
+							return nil
+						}
+						return err
+					}
+				}
+			}()
+			if err != nil {
+				// If canceled, do not retry
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				// retry request after 1 second
+				connection.failed = true
+				time.Sleep(time.Second)
+				continue
+			}
+			break
+		}
+		return
+	}
+
 	for {
-		// if chunk is completed, return
-		if f.meta.Res.Range && chunk.Downloaded >= chunk.End-chunk.Begin+1 {
+		if err = downloadChunk(connection.Chunk); err != nil {
 			return
 		}
 
-		if chunk.retryTimes >= maxRetries {
-			if !f.meta.Res.Range {
-				return
-			}
-			// check if all failed
-			allFailed := true
-			for _, c := range f.chunks {
-				if chunk.Downloaded < chunk.End-chunk.Begin+1 && c.retryTimes < maxRetries {
-					allFailed = false
-					break
-				}
-			}
-			if allFailed {
-				return
-			}
+		// check this connection is completed
+		if !f.meta.Res.Range || !f.helpOtherConnection(connection) {
+			connection.Completed = true
+			return
 		}
+	}
+}
 
-		var (
-			resp *http.Response
-		)
-		if f.meta.Res.Range {
-			httpReq.Header.Set(base.HttpHeaderRange,
-				fmt.Sprintf(base.HttpHeaderRangeFormat, chunk.Begin+chunk.Downloaded, chunk.End))
-		} else {
-			chunk.Downloaded = 0
-		}
-		err = func() error {
-			resp, err = client.Do(httpReq)
-			if err != nil {
-				return err
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != base.HttpCodeOK && resp.StatusCode != base.HttpCodePartialContent {
-				err = NewRequestError(resp.StatusCode, resp.Status)
-				return err
-			}
-			// Http request success, reset retry times
-			chunk.retryTimes = 0
-			for {
-				n, err := resp.Body.Read(buf)
-				if n > 0 {
-					_, err := f.file.WriteAt(buf[:n], chunk.Begin+chunk.Downloaded)
-					if err != nil {
-						return err
-					}
-					chunk.Downloaded += int64(n)
-				}
-				if err != nil {
-					if err == io.EOF {
-						return nil
-					}
-					return err
-				}
-			}
-			return nil
-		}()
-		if err != nil {
-			// If canceled, do not retry
-			if errors.Is(err, context.Canceled) {
-				return
-			}
-			// retry request after 1 second
-			chunk.retryTimes = chunk.retryTimes + 1
-			time.Sleep(time.Second)
+func (f *Fetcher) helpOtherConnection(helper *connection) bool {
+	f.helpLock.Lock()
+	defer f.helpLock.Unlock()
+
+	// find the slowest connection
+	var maxRemainConnection *connection
+	var maxRemain int64
+	for _, r := range f.connections {
+		if r == helper || r.Completed {
 			continue
 		}
-		// if chunk is completed, reset other not complete chunks retry times
-		if err == nil {
-			for _, c := range f.chunks {
-				if c != chunk && c.retryTimes > 0 {
-					c.retryTimes = 0
-				}
-			}
+
+		remain := r.Chunk.remain()
+		if remain > maxRemain && remain > helpMinSize {
+			maxRemainConnection = r
+			maxRemain = remain
 		}
-		break
 	}
-	return
+
+	if maxRemainConnection == nil {
+		return false
+	}
+
+	// re-calculate the chunk range
+	helper.Chunk.Begin = maxRemainConnection.Chunk.End - maxRemainConnection.Chunk.remain()/2
+	helper.Chunk.End = maxRemainConnection.Chunk.End
+	helper.Chunk.Downloaded = 0
+	maxRemainConnection.Chunk.End = helper.Chunk.Begin - 1
+	return true
 }
 
 func (f *Fetcher) buildRequest(ctx context.Context, req *base.Request) (httpReq *http.Request, err error) {
-	url, err := url.Parse(req.URL)
-	if err != nil {
-		return
+	var reqUrl string
+	if f.redirectURL != "" {
+		reqUrl = f.redirectURL
+	} else {
+		reqUrl = req.URL
 	}
 
 	var (
 		method string
 		body   io.Reader
 	)
-	headers := make(map[string][]string)
+	headers := http.Header{}
 	if req.Extra == nil {
 		method = http.MethodGet
 	} else {
@@ -397,7 +540,7 @@ func (f *Fetcher) buildRequest(ctx context.Context, req *base.Request) (httpReq 
 		}
 		if len(extra.Header) > 0 {
 			for k, v := range extra.Header {
-				headers[k] = []string{v}
+				headers.Set(k, strings.TrimSpace(v))
 			}
 		}
 		if extra.Body != "" {
@@ -405,98 +548,158 @@ func (f *Fetcher) buildRequest(ctx context.Context, req *base.Request) (httpReq 
 		}
 	}
 	if _, ok := headers[base.HttpHeaderUserAgent]; !ok {
-		// load user agent from config
-		headers[base.HttpHeaderUserAgent] = []string{f.config.UserAgent}
+		headers.Set(base.HttpHeaderUserAgent, strings.TrimSpace(f.config.UserAgent))
 	}
 
 	if ctx != nil {
-		httpReq, err = http.NewRequestWithContext(ctx, method, url.String(), body)
+		httpReq, err = http.NewRequestWithContext(ctx, method, reqUrl, body)
 	} else {
-		httpReq, err = http.NewRequest(method, url.String(), body)
+		httpReq, err = http.NewRequest(method, reqUrl, body)
 	}
 	if err != nil {
 		return
 	}
 	httpReq.Header = headers
+	// Override Host header
+	if host := headers.Get(base.HttpHeaderHost); host != "" {
+		httpReq.Host = host
+	}
 	return httpReq, nil
 }
 
-func (f *Fetcher) splitChunk() (chunks []*chunk) {
+func (f *Fetcher) splitConnection() (connections []*connection) {
 	if f.meta.Res.Range {
-		connections := f.meta.Opts.Extra.(*fhttp.OptsExtra).Connections
+		optConnections := f.meta.Opts.Extra.(*fhttp.OptsExtra).Connections
 		// 每个连接平均需要下载的分块大小
-		chunkSize := f.meta.Res.Size / int64(connections)
-		chunks = make([]*chunk, connections)
-		for i := 0; i < connections; i++ {
+		chunkSize := f.meta.Res.Size / int64(optConnections)
+		connections = make([]*connection, optConnections)
+		for i := 0; i < optConnections; i++ {
 			var (
 				begin = chunkSize * int64(i)
 				end   int64
 			)
-			if i == connections-1 {
+			if i == optConnections-1 {
 				// 最后一个分块需要保证把文件下载完
 				end = f.meta.Res.Size - 1
 			} else {
 				end = begin + chunkSize - 1
 			}
-			chunk := newChunk(begin, end)
-			chunks[i] = chunk
+			connections[i] = &connection{
+				Chunk: newChunk(begin, end),
+			}
 		}
 	} else {
 		// 只支持单连接下载
-		chunks = make([]*chunk, 1)
-		chunks[0] = newChunk(0, 0)
+		connections = make([]*connection, 1)
+		connections[0] = &connection{
+			Chunk: newChunk(0, 0),
+		}
 	}
 	return
 }
 
 func (f *Fetcher) buildClient() *http.Client {
-	transport := &http.Transport{}
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout: connectTimeout,
+		}).DialContext,
+		Proxy: f.ctl.GetProxy(f.meta.Req.Proxy),
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: f.meta.Req.SkipVerifyCert,
+		},
+	}
 	// Cookie handle
 	jar, _ := cookiejar.New(nil)
-	if f.ctl.ProxyUrl != nil {
-		transport.Proxy = http.ProxyURL(f.ctl.ProxyUrl)
-	}
 	return &http.Client{
 		Transport: transport,
 		Jar:       jar,
 	}
 }
 
+func decodeMangledString(mangled string) string {
+	rawBytes := make([]byte, 0, len(mangled)*3)
+	for _, r := range mangled {
+		rawBytes = append(rawBytes, byte(r))
+	}
+	return string(rawBytes)
+}
+
 type fetcherData struct {
-	Chunks []*chunk
+	Connections []*connection
 }
 
-type FetcherBuilder struct {
+type FetcherManager struct {
 }
 
-var schemes = []string{"HTTP", "HTTPS"}
-
-func (fb *FetcherBuilder) Schemes() []string {
-	return schemes
+func (fm *FetcherManager) Name() string {
+	return "http"
 }
 
-func (fb *FetcherBuilder) Build() fetcher.Fetcher {
+func (fm *FetcherManager) Filters() []*fetcher.SchemeFilter {
+	return []*fetcher.SchemeFilter{
+		{
+			Type:    fetcher.FilterTypeUrl,
+			Pattern: "HTTP",
+		},
+		{
+			Type:    fetcher.FilterTypeUrl,
+			Pattern: "HTTPS",
+		},
+	}
+}
+
+func (fm *FetcherManager) Build() fetcher.Fetcher {
 	return &Fetcher{}
 }
 
-func (fb *FetcherBuilder) Store(f fetcher.Fetcher) (data any, err error) {
+func (fm *FetcherManager) ParseName(u string) string {
+	var name string
+	url, err := url.Parse(u)
+	if err != nil {
+		return ""
+	}
+	// Get filePath by URL
+	name = path.Base(url.Path)
+	// If file name is empty, use host name
+	if name == "" || name == "/" || name == "." {
+		name = url.Hostname()
+	}
+	return name
+}
+
+func (fm *FetcherManager) AutoRename() bool {
+	return true
+}
+
+func (fm *FetcherManager) DefaultConfig() any {
+	return &config{
+		UserAgent:   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+		Connections: 16,
+	}
+}
+
+func (fm *FetcherManager) Store(f fetcher.Fetcher) (data any, err error) {
 	_f := f.(*Fetcher)
 	return &fetcherData{
-		Chunks: _f.chunks,
+		Connections: _f.connections,
 	}, nil
 }
 
-func (fb *FetcherBuilder) Restore() (v any, f func(meta *fetcher.FetcherMeta, v any) fetcher.Fetcher) {
+func (fm *FetcherManager) Restore() (v any, f func(meta *fetcher.FetcherMeta, v any) fetcher.Fetcher) {
 	return &fetcherData{}, func(meta *fetcher.FetcherMeta, v any) fetcher.Fetcher {
 		fd := v.(*fetcherData)
-		fb := &FetcherBuilder{}
+		fb := &FetcherManager{}
 		fetcher := fb.Build().(*Fetcher)
 		fetcher.meta = meta
 		base.ParseReqExtra[fhttp.ReqExtra](fetcher.meta.Req)
 		base.ParseOptsExtra[fhttp.OptsExtra](fetcher.meta.Opts)
-		if len(fd.Chunks) > 0 {
-			fetcher.chunks = fd.Chunks
+		if len(fd.Connections) > 0 {
+			fetcher.connections = fd.Connections
 		}
 		return fetcher
 	}
+}
+
+func (fm *FetcherManager) Close() error {
+	return nil
 }

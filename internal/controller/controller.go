@@ -1,14 +1,16 @@
 package controller
 
 import (
+	"github.com/GopeedLab/gopeed/pkg/base"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 )
 
 type Controller struct {
-	GetConfig func(v any) bool
-	ProxyUrl  *url.URL
+	GetConfig func(v any)
+	GetProxy  func(requestProxy *base.RequestProxy) func(*http.Request) (*url.URL, error)
 	FileController
 	//ContextDialer() (proxy.Dialer, error)
 }
@@ -22,10 +24,11 @@ type DefaultFileController struct {
 
 func NewController() *Controller {
 	return &Controller{
-		FileController: &DefaultFileController{},
-		GetConfig: func(v any) bool {
-			return false
+		GetConfig: func(v any) {},
+		GetProxy: func(requestProxy *base.RequestProxy) func(*http.Request) (*url.URL, error) {
+			return requestProxy.ToHandler()
 		},
+		FileController: &DefaultFileController{},
 	}
 }
 

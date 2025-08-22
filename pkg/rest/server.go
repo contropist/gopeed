@@ -2,6 +2,10 @@ package rest
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/GopeedLab/gopeed/pkg/download"
@@ -10,40 +14,56 @@ import (
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
+	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 var (
-	srv *http.Server
+	srv         *http.Server
+	runningPort int
+	aesKey      []byte
 
 	Downloader *download.Downloader
 )
 
-func Start(startCfg *model.StartConfig) (int, error) {
-	srv, listener, err := BuildServer(startCfg)
+func Start(startCfg *model.StartConfig) (port int, err error) {
+	// avoid repeat start
+	if srv != nil {
+		return runningPort, nil
+	}
+
+	var listener net.Listener
+	srv, listener, err = BuildServer(startCfg)
 	if err != nil {
-		return 0, err
+		return
 	}
 
 	go func() {
-		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			panic(err)
 		}
 	}()
 
-	port := 0
 	if addr, ok := listener.Addr().(*net.TCPAddr); ok {
 		port = addr.Port
+		runningPort = port
 	}
-	return port, nil
+	return
 }
 
 func Stop() {
+	defer func() {
+		srv = nil
+	}()
+
 	if srv != nil {
 		if err := srv.Shutdown(context.TODO()); err != nil {
 			Downloader.Logger.Warn().Err(err).Msg("shutdown server failed")
@@ -82,18 +102,27 @@ func BuildServer(startCfg *model.StartConfig) (*http.Server, net.Listener, error
 		util.SafeRemove(startCfg.Address)
 	}
 
+	if startCfg.WebEnable {
+		aesKey = make([]byte, 32)
+		if _, err := rand.Read(aesKey); err != nil {
+			return nil, nil, errors.Wrap(err, "generate aes key failed")
+		}
+	}
+
 	listener, err := net.Listen(startCfg.Network, startCfg.Address)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	var r = mux.NewRouter()
+	r.Methods(http.MethodGet).Path("/api/v1/info").HandlerFunc(Info)
 	r.Methods(http.MethodPost).Path("/api/v1/resolve").HandlerFunc(Resolve)
 	r.Methods(http.MethodPost).Path("/api/v1/tasks").HandlerFunc(CreateTask)
+	r.Methods(http.MethodPost).Path("/api/v1/tasks/batch").HandlerFunc(CreateTaskBatch)
 	r.Methods(http.MethodPut).Path("/api/v1/tasks/{id}/pause").HandlerFunc(PauseTask)
+	r.Methods(http.MethodPut).Path("/api/v1/tasks/pause").HandlerFunc(PauseTasks)
 	r.Methods(http.MethodPut).Path("/api/v1/tasks/{id}/continue").HandlerFunc(ContinueTask)
-	r.Methods(http.MethodPut).Path("/api/v1/tasks/pause").HandlerFunc(PauseAllTask)
-	r.Methods(http.MethodPut).Path("/api/v1/tasks/continue").HandlerFunc(ContinueAllTask)
+	r.Methods(http.MethodPut).Path("/api/v1/tasks/continue").HandlerFunc(ContinueTasks)
 	r.Methods(http.MethodDelete).Path("/api/v1/tasks/{id}").HandlerFunc(DeleteTask)
 	r.Methods(http.MethodDelete).Path("/api/v1/tasks").HandlerFunc(DeleteTasks)
 	r.Methods(http.MethodGet).Path("/api/v1/tasks/{id}").HandlerFunc(GetTask)
@@ -110,27 +139,94 @@ func BuildServer(startCfg *model.StartConfig) (*http.Server, net.Listener, error
 	r.Methods(http.MethodGet).Path("/api/v1/extensions/{identity}/update").HandlerFunc(UpdateCheckExtension)
 	r.Methods(http.MethodPost).Path("/api/v1/extensions/{identity}/update").HandlerFunc(UpdateExtension)
 	r.Path("/api/v1/proxy").HandlerFunc(DoProxy)
+
+	enableApiToken := startCfg.ApiToken != ""
+	enableBasicAuth := startCfg.WebEnable && startCfg.WebAuth != nil
 	if startCfg.WebEnable {
+		if enableBasicAuth {
+			r.Methods(http.MethodPost).Path("/api/web/login").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var loginReq model.WebAuth
+				if ReadJson(r, w, &loginReq) {
+					if loginReq.Username == startCfg.WebAuth.Username && loginReq.Password == startCfg.WebAuth.Password {
+						// Generate a login token, Username:Password:Timestamp
+						timestamp := time.Now().Unix()
+						tokenData := fmt.Sprintf("%s:%s:%d", loginReq.Username, loginReq.Password, timestamp)
+						token, err := aesEncrypt(aesKey, []byte(tokenData))
+						if err != nil {
+							WriteJson(w, model.NewErrorResult(err.Error()))
+							return
+						}
+
+						WriteJson(w, model.NewOkResult(token))
+						return
+					}
+				}
+				WriteStatusJson(w, http.StatusUnauthorized, model.NewErrorResult("unauthorized", model.CodeUnauthorized))
+			})
+		}
 		r.PathPrefix("/fs/tasks").Handler(http.FileServer(new(taskFileSystem)))
 		r.PathPrefix("/fs/extensions").Handler(http.FileServer(new(extensionFileSystem)))
-		r.PathPrefix("/").Handler(http.FileServer(http.FS(startCfg.WebFS)))
+		r.PathPrefix("/").Handler(gzipMiddleware(http.FileServer(newEmbedCacheFileSystem(http.FS(startCfg.WebFS)))))
 	}
+	if enableApiToken || enableBasicAuth {
+		writeUnauthorized := func(w http.ResponseWriter, r *http.Request) {
+			WriteStatusJson(w, http.StatusUnauthorized, model.NewErrorResult("unauthorized", model.CodeUnauthorized))
+		}
 
-	if startCfg.ApiToken != "" || (startCfg.WebEnable && startCfg.WebBasicAuth != nil) {
 		r.Use(func(h http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if startCfg.ApiToken != "" && r.Header.Get("X-Api-Token") == startCfg.ApiToken {
-					h.ServeHTTP(w, r)
-					return
+				if enableApiToken {
+					apiTokenHeader := r.Header["X-Api-Token"]
+					// If api token header is set, only check api token ignore basic auth
+					if len(apiTokenHeader) > 0 {
+						if apiTokenHeader[0] == startCfg.ApiToken {
+							h.ServeHTTP(w, r)
+							return
+						}
+
+						writeUnauthorized(w, r)
+						return
+					}
 				}
-				if startCfg.WebEnable && startCfg.WebBasicAuth != nil {
-					if r.Header.Get("Authorization") == startCfg.WebBasicAuth.Authorization() {
+
+				if enableBasicAuth {
+					if r.URL.Path == "/api/web/login" {
 						h.ServeHTTP(w, r)
 						return
 					}
-					w.Header().Set("WWW-Authenticate", "Basic realm=\"gopeed web\"")
+
+					token := r.Header.Get("Authorization")
+					if token == "" {
+						writeUnauthorized(w, r)
+						return
+					}
+
+					token = strings.TrimPrefix(token, "Bearer ")
+					tokenData, err := aesDecrypt(aesKey, token)
+					if err != nil {
+						writeUnauthorized(w, r)
+						return
+					}
+					parts := strings.SplitN(string(tokenData), ":", 3)
+					username := parts[0]
+					password := parts[1]
+					timestamp, _ := strconv.Atoi(parts[2])
+
+					if username != startCfg.WebAuth.Username || password != startCfg.WebAuth.Password {
+						writeUnauthorized(w, r)
+						return
+					}
+
+					// Check if the token is expired (7 days)
+					if time.Now().Unix()-int64(timestamp) > 7*24*3600 {
+						writeUnauthorized(w, r)
+						return
+					}
+
+					h.ServeHTTP(w, r)
+					return
 				}
-				WriteStatusJson(w, http.StatusUnauthorized, model.NewErrorResult("unauthorized", model.CodeUnauthorized))
+				writeUnauthorized(w, r)
 			})
 		})
 	}
@@ -141,7 +237,7 @@ func BuildServer(startCfg *model.StartConfig) (*http.Server, net.Listener, error
 			defer func() {
 				if v := recover(); v != nil {
 					err := errors.WithStack(fmt.Errorf("%v", v))
-					Downloader.Logger.Error().Stack().Err(err).Msg("http server panic")
+					Downloader.Logger.Error().Stack().Err(err).Msgf("http server panic: %s %s", r.Method, r.RequestURI)
 					WriteJson(w, model.NewErrorResult(err.Error(), model.CodeError))
 				}
 			}()
@@ -150,9 +246,10 @@ func BuildServer(startCfg *model.StartConfig) (*http.Server, net.Listener, error
 	})
 
 	srv = &http.Server{Handler: handlers.CORS(
-		handlers.AllowedHeaders([]string{"Content-Type", "X-Api-Token", "X-Target-Uri"}),
+		handlers.AllowedHeaders([]string{"Content-Type", "Authorization", "X-Api-Token", "X-Target-Uri"}),
 		handlers.AllowedMethods([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}),
 		handlers.AllowedOrigins([]string{"*"}),
+		handlers.AllowCredentials(),
 	)(r)}
 	return srv, listener, nil
 }
@@ -209,6 +306,68 @@ func (e *extensionFileSystem) Open(name string) (http.File, error) {
 	return os.Open(filepath.Join(extensionPath, path))
 }
 
+type embedCacheFileSystem struct {
+	fs          http.FileSystem
+	lastModTime time.Time
+}
+
+func newEmbedCacheFileSystem(fs http.FileSystem) *embedCacheFileSystem {
+	efs := &embedCacheFileSystem{
+		fs:          fs,
+		lastModTime: time.Now(),
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return efs
+	}
+
+	fi, err := os.Stat(exe)
+	if err != nil {
+		return efs
+	}
+
+	efs.lastModTime = fi.ModTime()
+	return efs
+}
+
+func (e *embedCacheFileSystem) Open(name string) (http.File, error) {
+	file, err := e.fs.Open(name)
+	if err != nil {
+		return nil, err
+	}
+
+	return &embedFile{
+		File:        file,
+		lastModTime: e.lastModTime,
+	}, nil
+}
+
+type embedFile struct {
+	http.File
+	lastModTime time.Time
+}
+
+type embedFileInfo struct {
+	fs.FileInfo
+	lastModTime time.Time
+}
+
+func (e *embedFileInfo) ModTime() time.Time {
+	return e.lastModTime
+}
+
+func (e *embedFile) Stat() (fs.FileInfo, error) {
+	fi, err := e.File.Stat()
+	if err != nil {
+		return nil, err
+	}
+	return &embedFileInfo{
+		FileInfo:    fi,
+		lastModTime: e.lastModTime,
+	}, nil
+}
+
 func ReadJson(r *http.Request, w http.ResponseWriter, v any) bool {
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
 		WriteJson(w, model.NewErrorResult(err.Error()))
@@ -225,4 +384,48 @@ func WriteStatusJson(w http.ResponseWriter, statusCode int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(v)
+}
+
+func aesEncrypt(key, data []byte) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+
+	cipherText := gcm.Seal(nonce, nonce, data, nil)
+	return base64.StdEncoding.EncodeToString(cipherText), nil
+}
+
+func aesDecrypt(key []byte, encryptedData string) ([]byte, error) {
+	cipherText, err := base64.StdEncoding.DecodeString(encryptedData)
+	if err != nil {
+		return nil, err
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(cipherText) < gcm.NonceSize() {
+		return nil, errors.New("ciphertext too short")
+	}
+
+	nonce, cipherText := cipherText[:gcm.NonceSize()], cipherText[gcm.NonceSize():]
+	return gcm.Open(nil, nonce, cipherText, nil)
 }

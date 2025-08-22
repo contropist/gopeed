@@ -2,16 +2,20 @@ package xhr
 
 import (
 	"bytes"
-	"github.com/GopeedLab/gopeed/pkg/download/engine/inject/file"
-	"github.com/GopeedLab/gopeed/pkg/download/engine/inject/formdata"
-	"github.com/GopeedLab/gopeed/pkg/download/engine/util"
-	"github.com/dop251/goja"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+
+	"github.com/GopeedLab/gopeed/pkg/download/engine/inject/file"
+	"github.com/GopeedLab/gopeed/pkg/download/engine/inject/formdata"
+	"github.com/GopeedLab/gopeed/pkg/download/engine/util"
+	"github.com/dop251/goja"
+	"github.com/imroc/req/v3"
 )
 
 const (
@@ -21,6 +25,12 @@ const (
 	eventAbort            = "abort"
 	eventError            = "error"
 	eventTimeout          = "timeout"
+)
+
+const (
+	redirectError  = "error"
+	redirectFollow = "follow"
+	redirectManual = "manual"
 )
 
 type ProgressEvent struct {
@@ -117,18 +127,26 @@ type XMLHttpRequestUpload struct {
 type XMLHttpRequest struct {
 	method          string
 	url             string
-	requestHeaders  map[string]string
-	responseHeaders map[string]string
+	requestHeaders  http.Header
+	responseHeaders http.Header
 	aborted         bool
-	proxyUrl        *url.URL
+	client          *req.Client
 
-	Upload       *XMLHttpRequestUpload `json:"upload"`
-	Timeout      int                   `json:"timeout"`
-	ReadyState   int                   `json:"readyState"`
-	Status       int                   `json:"status"`
-	StatusText   string                `json:"statusText"`
-	Response     string                `json:"response"`
-	ResponseText string                `json:"responseText"`
+	WithCredentials bool                  `json:"withCredentials"`
+	Upload          *XMLHttpRequestUpload `json:"upload"`
+	Timeout         int                   `json:"timeout"`
+	ReadyState      int                   `json:"readyState"`
+	Status          int                   `json:"status"`
+	StatusText      string                `json:"statusText"`
+	Response        string                `json:"response"`
+	ResponseText    string                `json:"responseText"`
+	// https://developer.mozilla.org/zh-CN/docs/Web/API/XMLHttpRequest/responseURL
+	// https://xhr.spec.whatwg.org/#the-responseurl-attribute
+	ResponseUrl string `json:"responseURL"`
+	// extend fetch redirect
+	// https://developer.mozilla.org/en-US/docs/Web/API/RequestInit#redirect
+	// https://fetch.spec.whatwg.org/#concept-request-redirect-mode
+	Redirect string `json:"redirect"`
 	*EventProp
 	Onreadystatechange func(event *ProgressEvent) `json:"onreadystatechange"`
 }
@@ -136,47 +154,63 @@ type XMLHttpRequest struct {
 func (xhr *XMLHttpRequest) Open(method, url string) {
 	xhr.method = method
 	xhr.url = url
-	xhr.requestHeaders = make(map[string]string)
-	xhr.responseHeaders = make(map[string]string)
+	xhr.requestHeaders = make(http.Header)
+	xhr.responseHeaders = make(http.Header)
 	xhr.doReadystatechange(1)
 }
 
 func (xhr *XMLHttpRequest) SetRequestHeader(key, value string) {
-	xhr.requestHeaders[key] = value
+	xhr.requestHeaders.Add(key, value)
 }
 
 func (xhr *XMLHttpRequest) Send(data goja.Value) {
-	var req *http.Request
-	var err error
+	setFingerprint(xhr.client)
+
 	d := xhr.parseData(data)
 	var (
 		contentType   string
 		contentLength int64
+		isStringBody  bool
 	)
-	if d == nil || xhr.method == "GET" || xhr.method == "HEAD" {
-		req, err = http.NewRequest(xhr.method, xhr.url, nil)
-	} else {
-		switch d.(type) {
+
+	// Create request using req library
+	reqBuilder := xhr.client.R()
+
+	// Set headers first
+	if xhr.requestHeaders != nil {
+		for key, values := range xhr.requestHeaders {
+			if len(values) > 0 {
+				// Merge multiple values with comma separator (HTTP standard)
+				mergedValue := strings.Join(values, ", ")
+				reqBuilder.SetHeader(key, mergedValue)
+			}
+		}
+	}
+
+	// Handle request body
+	if d != nil && xhr.method != "GET" && xhr.method != "HEAD" {
+		switch v := d.(type) {
 		case string:
-			req, err = http.NewRequest(xhr.method, xhr.url, bytes.NewBufferString(d.(string)))
+			reqBuilder.SetBody(v)
 			contentType = "text/plain;charset=UTF-8"
-			contentLength = int64(len(d.(string)))
+			contentLength = int64(len(v))
+			isStringBody = true
 		case *file.File:
-			req, err = http.NewRequest(xhr.method, xhr.url, d.(*file.File).Reader)
+			reqBuilder.SetBody(v.Reader)
 			contentType = "application/octet-stream"
-			contentLength = d.(*file.File).Size
+			contentLength = v.Size
 		case *formdata.FormData:
 			pr, pw := io.Pipe()
 			mw := NewMultipart(pw)
-			for _, e := range d.(*formdata.FormData).Entries() {
+			for _, e := range v.Entries() {
 				arr := e.([]any)
 				k := arr[0].(string)
 				v := arr[1]
-				switch v.(type) {
+				switch v := v.(type) {
 				case string:
-					mw.WriteField(k, v.(string))
+					mw.WriteField(k, v)
 				case *file.File:
-					mw.WriteFile(k, v.(*file.File))
+					mw.WriteFile(k, v)
 				}
 			}
 			go func() {
@@ -184,36 +218,42 @@ func (xhr *XMLHttpRequest) Send(data goja.Value) {
 				defer mw.Close()
 				mw.Send()
 			}()
-			req, err = http.NewRequest(xhr.method, xhr.url, pr)
+			reqBuilder.SetBody(pr)
 			contentType = mw.FormDataContentType()
 			contentLength = mw.Size()
 		}
 	}
-	if err != nil {
-		xhr.callOnerror()
-		return
+
+	// Only string body can specify Content-Type header by user
+	if contentType != "" && (!isStringBody || xhr.requestHeaders.Get("Content-Type") == "") {
+		reqBuilder.SetHeader("Content-Type", contentType)
 	}
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
+
+	// Set timeout
+	if xhr.Timeout > 0 {
+		xhr.client.SetTimeout(time.Duration(xhr.Timeout) * time.Millisecond)
 	}
-	if contentLength > 0 {
-		req.ContentLength = contentLength
-	}
-	for k, v := range xhr.requestHeaders {
-		req.Header.Set(k, v)
-	}
-	transport := &http.Transport{}
-	if xhr.proxyUrl != nil {
-		transport.Proxy = http.ProxyURL(xhr.proxyUrl)
-	}
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   time.Duration(xhr.Timeout) * time.Millisecond,
-	}
-	resp, err := client.Do(req)
+
+	// Configure redirect behavior
+	xhr.client.SetRedirectPolicy(func(req *http.Request, via []*http.Request) error {
+		if xhr.Redirect == redirectManual {
+			return http.ErrUseLastResponse
+		}
+		if xhr.Redirect == redirectError {
+			return errors.New("redirect failed")
+		}
+		if len(via) > 20 {
+			return errors.New("too many redirects")
+		}
+		return nil
+	})
+
+	// Execute request
+	resp, err := reqBuilder.Send(xhr.method, xhr.url)
 	if err != nil {
 		// handle timeout error
-		if err, ok := err.(net.Error); ok && err.Timeout() {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
 			if xhr.Timeout > 0 {
 				xhr.Upload.callOntimeout()
 				xhr.callOntimeout()
@@ -224,32 +264,37 @@ func (xhr *XMLHttpRequest) Send(data goja.Value) {
 		xhr.callOnerror()
 		return
 	}
-	defer resp.Body.Close()
+
 	xhr.Upload.callOnprogress(contentLength, contentLength)
 	if !xhr.aborted {
 		xhr.Upload.callOnload()
 	}
-	for k, v := range resp.Header {
-		xhr.responseHeaders[k] = v[0]
+
+	// Set response URL (final URL after redirects)
+	if resp.Response != nil && resp.Response.Request != nil && resp.Response.Request.URL != nil {
+		responseUrl := resp.Response.Request.URL
+		responseUrl.Fragment = ""
+		xhr.ResponseUrl = responseUrl.String()
+	} else {
+		xhr.ResponseUrl = xhr.url
 	}
+
+	// Set response headers
+	xhr.responseHeaders = resp.Header
 	xhr.Status = resp.StatusCode
 	xhr.StatusText = resp.Status
 	xhr.doReadystatechange(2)
-	buf, err := io.ReadAll(resp.Body)
-	if err != nil {
-		xhr.callOnerror()
-		return
-	}
+
+	bodyBytes := resp.Bytes()
 	xhr.doReadystatechange(3)
-	xhr.Response = string(buf)
+	xhr.Response = string(bodyBytes)
 	xhr.ResponseText = xhr.Response
 	xhr.doReadystatechange(4)
-	respBodyLen := int64(len(buf))
+	respBodyLen := int64(len(bodyBytes))
 	xhr.callOnprogress(respBodyLen, respBodyLen)
 	if !xhr.aborted {
 		xhr.callOnload()
 	}
-	return
 }
 
 func (xhr *XMLHttpRequest) Abort() {
@@ -260,7 +305,10 @@ func (xhr *XMLHttpRequest) Abort() {
 }
 
 func (xhr *XMLHttpRequest) GetResponseHeader(key string) string {
-	return xhr.responseHeaders[key]
+	if xhr.responseHeaders == nil {
+		return ""
+	}
+	return strings.Join(xhr.responseHeaders.Values(key), ", ")
 }
 
 func (xhr *XMLHttpRequest) GetAllResponseHeaders() string {
@@ -268,7 +316,7 @@ func (xhr *XMLHttpRequest) GetAllResponseHeaders() string {
 	for k, v := range xhr.responseHeaders {
 		buf.WriteString(k)
 		buf.WriteString(": ")
-		buf.WriteString(v)
+		buf.WriteString(strings.Join(v, ", "))
 		buf.WriteString("\r\n")
 	}
 	return buf.String()
@@ -313,7 +361,7 @@ func (xhr *XMLHttpRequest) parseData(data goja.Value) any {
 	return data.String()
 }
 
-func Enable(runtime *goja.Runtime, proxyUrl *url.URL) error {
+func Enable(runtime *goja.Runtime, proxyHandler func(r *http.Request) (*url.URL, error)) error {
 	progressEvent := runtime.ToValue(func(call goja.ConstructorCall) *goja.Object {
 		if len(call.Arguments) < 1 {
 			util.ThrowTypeError(runtime, "Failed to construct 'ProgressEvent': 1 argument required, but only 0 present.")
@@ -326,8 +374,14 @@ func Enable(runtime *goja.Runtime, proxyUrl *url.URL) error {
 		return instanceValue
 	})
 	xhr := runtime.ToValue(func(call goja.ConstructorCall) *goja.Object {
+		// Create req client with proxy support
+		client := req.C()
+		if proxyHandler != nil {
+			client.SetProxy(proxyHandler)
+		}
+
 		instance := &XMLHttpRequest{
-			proxyUrl: proxyUrl,
+			client: client,
 			Upload: &XMLHttpRequestUpload{
 				EventProp: &EventProp{
 					eventListeners: make(map[string]func(event *ProgressEvent)),
@@ -340,6 +394,9 @@ func Enable(runtime *goja.Runtime, proxyUrl *url.URL) error {
 		instanceValue := runtime.ToValue(instance).(*goja.Object)
 		instanceValue.SetPrototype(call.This.Prototype())
 		return instanceValue
+	})
+	runtime.Set("__gopeed_setFingerprint", func(fingerprint Fingerprint) {
+		currentFingerprint = fingerprint
 	})
 	if err := runtime.Set("ProgressEvent", progressEvent); err != nil {
 		return err
@@ -386,10 +443,9 @@ func (w *multipartWrapper) Size() int64 {
 	w.statWriter.Close()
 	size := int64(w.statBuffer.Len())
 	for _, v := range w.fields {
-		switch v.(type) {
+		switch v := v.(type) {
 		case *file.File:
-			f := v.(*file.File)
-			size += f.Size
+			size += v.Size
 		}
 	}
 	return size
@@ -397,18 +453,17 @@ func (w *multipartWrapper) Size() int64 {
 
 func (w *multipartWrapper) Send() error {
 	for k, v := range w.fields {
-		switch v.(type) {
+		switch v := v.(type) {
 		case string:
-			if err := w.writer.WriteField(k, v.(string)); err != nil {
+			if err := w.writer.WriteField(k, v); err != nil {
 				return err
 			}
 		case *file.File:
-			f := v.(*file.File)
-			fw, err := w.writer.CreateFormFile(k, f.Name)
+			fw, err := w.writer.CreateFormFile(k, v.Name)
 			if err != nil {
 				return err
 			}
-			if _, err = io.Copy(fw, f); err != nil {
+			if _, err = io.Copy(fw, v); err != nil {
 				return err
 			}
 		}

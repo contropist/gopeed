@@ -38,7 +38,7 @@ const (
 	EventOnResolve ActivationEvent = "onResolve"
 	EventOnStart   ActivationEvent = "onStart"
 	EventOnError   ActivationEvent = "onError"
-	//EventOnDone    ActivationEvent = "onDone"
+	EventOnDone    ActivationEvent = "onDone"
 )
 
 func (d *Downloader) InstallExtensionByGit(url string) (*Extension, error) {
@@ -155,7 +155,13 @@ func (d *Downloader) DeleteExtension(identity string) error {
 			break
 		}
 	}
-	return d.storage.Delete(bucketExtension, identity)
+	if err = d.storage.Delete(bucketExtension, identity); err != nil {
+		return err
+	}
+	if err = d.storage.Delete(bucketExtensionStorage, identity); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (d *Downloader) GetExtensions() []*Extension {
@@ -199,7 +205,7 @@ func (d *Downloader) fetchExtensionByGit(url string, handler func(tempExtPath st
 		return nil, err
 	}
 	proxyOptions := transport.ProxyOptions{}
-	proxyUrl := d.cfg.ProxyUrl()
+	proxyUrl := d.cfg.DownloaderStoreConfig.Proxy.ToUrl()
 	if proxyUrl != nil {
 		proxyOptions.URL = proxyUrl.Scheme + "://" + proxyUrl.Host
 		proxyOptions.Username = proxyUrl.User.Username()
@@ -298,6 +304,17 @@ func (d *Downloader) triggerOnError(task *Task, err error) {
 	)
 }
 
+func (d *Downloader) triggerOnDone(task *Task) {
+	doTrigger(d,
+		EventOnDone,
+		task.Meta.Req,
+		&OnErrorContext{
+			Task: NewExtensionTask(d, task),
+		},
+		nil,
+	)
+}
+
 func doTrigger[T any](d *Downloader, event ActivationEvent, req *base.Request, ctx T, handler func(ext *Extension, gopeed *Instance, ctx T)) error {
 	// init extension global object
 	gopeed := &Instance{
@@ -341,7 +358,7 @@ func doTrigger[T any](d *Downloader, event ActivationEvent, req *base.Request, c
 						req.Labels = make(map[string]string)
 					}
 					engine := engine.NewEngine(&engine.Config{
-						ProxyURL: d.cfg.ProxyUrl(),
+						ProxyConfig: d.cfg.Proxy,
 					})
 					defer engine.Close()
 					err = engine.Runtime.Set("gopeed", gopeed)
@@ -605,9 +622,9 @@ func (h InstanceEvents) OnError(fn goja.Callable) {
 	h.register(EventOnError, fn)
 }
 
-//func (h InstanceEvents) OnDone(fn goja.Callable) {
-//	h.register(HookEventOnDone, fn)
-//}
+func (h InstanceEvents) OnDone(fn goja.Callable) {
+	h.register(EventOnDone, fn)
+}
 
 type ExtensionInfo struct {
 	Identity string `json:"identity"`
@@ -681,25 +698,39 @@ type OnErrorContext struct {
 	Error error          `json:"error"`
 }
 
-type ExtensionTask struct {
-	*Task
+type OnDoneContext struct {
+	Task *Task `json:"task"`
+}
 
+// ExtensionTask is a wrapper of Task, it's used to interact with extension scripts.
+// Avoid extension scripts modifying task directly, use ExtensionTask to encapsulate task,
+// only some fields can be modified, such as request info.
+type ExtensionTask struct {
 	download *Downloader
+
+	*Task
 }
 
 func NewExtensionTask(download *Downloader, task *Task) *ExtensionTask {
+	// restricts extension scripts to only modify request info
+	newTask := task.clone()
+	newTask.Meta.Req = task.Meta.Req
 	return &ExtensionTask{
-		Task:     task.clone(),
 		download: download,
+		Task:     newTask,
 	}
 }
 
 func (t *ExtensionTask) Continue() error {
-	return t.download.Continue(t.ID)
+	return t.download.Continue(&TaskFilter{
+		IDs: []string{t.ID},
+	})
 }
 
 func (t *ExtensionTask) Pause() error {
-	return t.download.Pause(t.ID)
+	return t.download.Pause(&TaskFilter{
+		IDs: []string{t.ID},
+	})
 }
 
 func parseSettings(settings []*Setting) map[string]any {

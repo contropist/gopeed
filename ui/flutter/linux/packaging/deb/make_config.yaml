@@ -13,8 +13,8 @@ essential: false
 icon: assets/icon/icon.svg
 
 dependencies:
-  - libappindicator3-1 | libayatana-appindicator3-1
-  - gir1.2-appindicator3-0.1 | gir1.2-ayatanaappindicator3-0.1
+  - libayatana-appindicator3-1
+  - gir1.2-ayatanaappindicator3-0.1
 
 keywords:
   - Application
@@ -27,5 +27,10 @@ generic_name: Download Manager
 categories:
   - Network
   - Utility
+
+supported_mime_type:
+  - x-scheme-handler/gopeed
+  - x-scheme-handler/magnet
+  - application/x-bittorrent
 
 startup_notify: true

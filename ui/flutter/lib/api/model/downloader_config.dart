@@ -17,6 +17,7 @@ class DownloaderConfig {
 
   factory DownloaderConfig.fromJson(Map<String, dynamic> json) =>
       _$DownloaderConfigFromJson(json);
+
   Map<String, dynamic> toJson() => _$DownloaderConfigToJson(this);
 }
 
@@ -29,6 +30,7 @@ class ProtocolConfig {
 
   factory ProtocolConfig.fromJson(Map<String, dynamic>? json) =>
       json == null ? ProtocolConfig() : _$ProtocolConfigFromJson(json);
+
   Map<String, dynamic> toJson() => _$ProtocolConfigToJson(this);
 }
 
@@ -39,45 +41,67 @@ class HttpConfig {
   bool useServerCtime;
 
   HttpConfig({
-    this.userAgent =
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
-    this.connections = 16,
+    this.userAgent = '',
+    this.connections = 0,
     this.useServerCtime = false,
   });
 
   factory HttpConfig.fromJson(Map<String, dynamic> json) =>
       _$HttpConfigFromJson(json);
+
   Map<String, dynamic> toJson() => _$HttpConfigToJson(this);
 }
 
 @JsonSerializable()
 class BtConfig {
-  int listenPort = 0;
-  List<String> trackers = [];
+  int listenPort;
+  List<String> trackers;
+  bool seedKeep;
+  double seedRatio;
+  int seedTime;
 
-  BtConfig();
+  BtConfig({
+    this.listenPort = 0,
+    this.trackers = const [],
+    this.seedKeep = false,
+    this.seedRatio = 0,
+    this.seedTime = 0,
+  });
 
   factory BtConfig.fromJson(Map<String, dynamic> json) =>
       _$BtConfigFromJson(json);
+
   Map<String, dynamic> toJson() => _$BtConfigToJson(this);
 }
 
 @JsonSerializable(explicitToJson: true)
 class ExtraConfig {
-  String themeMode = '';
-  String locale = '';
+  String themeMode;
+  String locale;
+  bool lastDeleteTaskKeep;
+  bool defaultDirectDownload;
+  bool defaultBtClient;
+
   ExtraConfigBt bt = ExtraConfigBt();
 
-  ExtraConfig();
+  ExtraConfig({
+    this.themeMode = '',
+    this.locale = '',
+    this.lastDeleteTaskKeep = false,
+    this.defaultDirectDownload = false,
+    this.defaultBtClient = true,
+  });
 
   factory ExtraConfig.fromJson(Map<String, dynamic>? json) =>
       json == null ? ExtraConfig() : _$ExtraConfigFromJson(json);
+
   Map<String, dynamic> toJson() => _$ExtraConfigToJson(this);
 }
 
 @JsonSerializable()
 class ProxyConfig {
   bool enable;
+  bool system;
   String scheme;
   String host;
   String usr;
@@ -85,6 +109,7 @@ class ProxyConfig {
 
   ProxyConfig({
     this.enable = false,
+    this.system = false,
     this.scheme = '',
     this.host = '',
     this.usr = '',
@@ -110,5 +135,6 @@ class ExtraConfigBt {
 
   factory ExtraConfigBt.fromJson(Map<String, dynamic> json) =>
       _$ExtraConfigBtFromJson(json);
+
   Map<String, dynamic> toJson() => _$ExtraConfigBtToJson(this);
 }
